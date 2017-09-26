@@ -7,6 +7,7 @@ bench/trio/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
+/.pybuild/
 *.py[cod]
 *~
 \#*
