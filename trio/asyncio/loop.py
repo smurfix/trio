@@ -2,6 +2,7 @@
 # This code implements a clone of the asyncio mainloop which hooks into
 # Trio.
 
+import os
 import sys
 import trio
 import asyncio
@@ -46,6 +47,8 @@ def _format_callback_source(func, args, kwargs):
         func_repr += ' at %s:%s' % source
     return func_repr
 
+_nr=0
+
 class _QuitEvent(trio.Event):
     """Used to signal the mainloop to stop,
     as opposed to a "normal" event used for syncing.
@@ -69,6 +72,12 @@ class _TrioHandle:
     has been cancelled before invoking ``call_[a]sync()``.
     """
 
+    def __init__(self,*a,**k):
+        global _nr
+        _nr = _nr+1
+        self._nr = _nr
+        super().__init__(*a,**k)
+
     def _init(self, kwargs, is_sync):
         """Secondary init.
         """
@@ -81,6 +90,7 @@ class _TrioHandle:
         self._kwargs = None
         if self._scope is not None:
             self._scope.cancel()
+        print("H Cancel",self)
 
     def _cb_future_cancel(self, f):
         """If a Trio task completes an asyncio Future,
@@ -93,7 +103,7 @@ class _TrioHandle:
             self.cancel()
 
     def _repr_info(self):
-        info = [self.__class__.__name__]
+        info = ["%s:%s" % (self.__class__.__name__,self._nr)]
         if self._cancelled:
             info.append('cancelled')
         if self._callback is not None:
@@ -102,6 +112,9 @@ class _TrioHandle:
             frame = self._source_traceback[-1]
             info.append('created at %s:%s' % (frame[0], frame[1]))
         return info
+
+    def _instrument(self, *a):
+        self._loop._task._runner.instrument(*a)
 
     def _call_sync(self):
         assert self._is_sync
@@ -116,7 +129,7 @@ class _TrioHandle:
             return res
         
     async def _call_async(self):
-        logger.debug("Start call: %s", self)
+        logger.debug("Async call: %s", self)
         assert not self._is_sync
         assert not self._cancelled
         try:
@@ -142,6 +155,7 @@ class Handle(_TrioHandle, asyncio.Handle):
     def __init__(self, callback, args, kwargs, loop, is_sync):
         super().__init__(callback, args, loop)
         self._init(kwargs,is_sync)
+        print("H New",self)
 
 class DeltaTime:
     __slots__= ('delta')
@@ -167,6 +181,7 @@ class TimerHandle(_TrioHandle, asyncio.TimerHandle):
             is_relative = True
         self._init(kwargs,is_sync)
         self._relative = is_relative
+        print("TH New",self)
 
     def _abs_time(self):
         if self._relative:
@@ -484,13 +499,17 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
         handle = Handle(callback, args, {}, self, True)
         reader = self._set_read_handle(fd, handle)
         if reader is not None:
+            print("OR",reader)
             reader.cancel()
         if self._token is None:
+            print("DR",handle)
             return
         self._nursery.start_soon(self._reader_loop, fd, handle)
+        print("AR",handle)
 
     def _remove_reader(self, fd):
         if self.is_closed():
+            print("R",fd,"closed")
             return False
         try:
             key = self._selector.get_key(fd)
@@ -500,14 +519,18 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
             mask, (reader, writer) = key.events, key.data
             mask &= ~asyncio.selectors.EVENT_READ
             if not mask:
+                print("R",fd,"unreg",reader)
                 self._selector.unregister(fd)
             else:
+                print("R",fd,"modNR",reader)
                 self._selector.modify(fd, mask, (None, writer))
 
             if reader is not None:
+                print("R",fd,"cancel",reader)
                 reader.cancel()
                 return True
             else:
+                print("R",fd,"none")
                 return False
 
     def _set_read_handle(self, fd, handle):
@@ -523,10 +546,12 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
 
     async def _reader_loop(self, fd, handle, task_status=trio.STATUS_IGNORED):
         task_status.started()
+        self._task._runner.instrument("start_io_task","read",fd,handle)
         with trio.open_cancel_scope() as scope:
             handle._scope = scope
             try:
                 while not handle._cancelled:
+                    print("RX",handle)
                     await trio.hazmat.wait_readable(fd)
                     handle._call_sync()
                     await self._sync()
@@ -534,6 +559,7 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
                 logger.exception("Reading %d: Calling %s", fd, handle)
             finally:
                 handle._scope = None
+                self._task._runner.instrument("stop_io_task","read",fd,handle)
 
     # writing to a file descriptor
 
@@ -542,13 +568,17 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
         handle = Handle(callback, args, {}, self, True)
         writer = self._set_write_handle(fd, handle)
         if writer is not None:
+            print("OW",writer)
             writer.cancel()
         if self._token is None:
+            print("DW",handle)
             return
         self._nursery.start_soon(self._writer_loop, fd, handle)
+        print("AW",handle)
 
     def _remove_writer(self, fd):
         if self.is_closed():
+            print("W",fd,"closed")
             return False
         try:
             key = self._selector.get_key(fd)
@@ -558,8 +588,10 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
             mask, (reader, writer) = key.events, key.data
             mask &= ~asyncio.selectors.EVENT_WRITE
             if not mask:
+                #print("W",fd,"unreg",writer)
                 self._selector.unregister(fd)
             else:
+                #print("R",fd,"modNR",writer)
                 self._selector.modify(fd, mask, (reader, None))
 
             if writer is not None:
@@ -585,6 +617,7 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
             self._task._runner.instrument("start_io_task","write",fd,handle)
             try:
                 while not handle._cancelled:
+                    print("WX",handle)
                     await trio.hazmat.wait_writable(fd)
                     handle._call_sync()
                     await self._sync()
@@ -592,6 +625,7 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
                 logger.exception("writing %d: Calling %s", fd, handle)
             finally:
                 handle._scope = None
+                self._task._runner.instrument("stop_io_task","write",fd,handle)
 
     def _save_fds(self):
         map = self._selector.get_map()
@@ -619,6 +653,11 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
 
     # Trio-based main loop
 
+#    def call_exception_handler(self,msg):
+#        import pdb;pdb.set_trace()
+#        print("OWCH",msg)
+#        pass
+
     async def main_loop(self, task_status=trio.STATUS_IGNORED):
         """This is the Trio replacement of the asyncio loop's main loop.
 
@@ -628,9 +667,16 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
         Use ``run_forever()`` or ``run_until_complete()`` instead if your
         main code is asyncio-based.
         """
+        def sig_hook(s,x):
+            import pdb;pdb.set_trace()
+            pass
         try:
+            try:
+                _old_intr = signal.signal(signal.SIGINT,sig_hook)
+            except ValueError:
+                _old_intr = None
             self._task = trio.hazmat.current_task()
-            self._task._runner.instrument("loop_start")
+            self._task._runner.instrument("loop_start",self)
 
             async with trio.open_nursery() as nursery:
                 self._nursery = nursery
@@ -664,6 +710,7 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
                             time_valid = False
                             with trio.move_on_after(timeout) as cancel_scope:
                                 obj = await self._q.get()
+                            print("run",obj)
                             if cancel_scope.cancel_called:
                                 continue
 
@@ -691,6 +738,7 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
                 except trio.Cancelled:
                     logger.fatal("Mainloop was cancelled directly")
                 finally:
+                    self._task._runner.instrument("loop_end")
 
                     # Save open file descriptors (but not the self-pipe)
                     try:
@@ -710,6 +758,8 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
 
                     del self._nursery
                     self._token = None
+                    if _old_intr is not None:
+                        signal.signal(signal.SIGINT,_old_intr)
                     if obj is not None:
                         obj.set()
 
@@ -763,7 +813,7 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
         super().run_forever()
         
     def _run_once(self):
-        trio.run(self.main_loop)
+        trio.run(self.main_loop, instruments=[Tracer()])
 
     def stop(self):
         """Halt the main loop.
@@ -790,9 +840,86 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
             raise RuntimeError("You need to stop the loop before closing it")
 
         
+class Tracer(trio.abc.Instrument):
+    def before_run(self):
+        print("!!! run started")
+
+    def _print_with_task(self, msg, task):
+        # repr(task) is perhaps more useful than task.name in general,
+        # but in context of a tutorial the extra noise is unhelpful.
+        print("{}: {} {}".format(msg, task.name,id(task)))
+
+    def task_spawned(self, task):
+        return
+        self._print_with_task("### new task spawned", task)
+
+    def task_scheduled(self, task):
+        return
+        self._print_with_task("### task scheduled", task)
+
+    def before_task_step(self, task):
+        return
+        self._print_with_task(">>> about to run one step of task", task)
+
+    def after_task_step(self, task):
+        return
+        self._print_with_task("<<< task step finished", task)
+
+    def task_exited(self, task):
+        self._print_with_task("### task exited", task)
+
+    def before_io_wait(self, timeout):
+        return
+        if timeout:
+            print("### waiting for I/O for up to {} seconds".format(timeout))
+        else:
+            print("### doing a quick check for I/O")
+        self._sleep_time = trio.current_time()
+
+    def after_io_wait(self, timeout):
+        return
+        duration = trio.current_time() - self._sleep_time
+        print("### finished I/O check (took {} seconds)".format(duration))
+
+    def after_run(self):
+        print("!!! run finished")
+
+    def add_handle(self, dir,fd,handle):
+        print("... add {} {} {}".format(dir,fd,handle))
+
+    def remove_handle(self, dir,fd):
+        print("... remove {} {} {}".format(dir,fd,handle))
+
+    def start_io_task(self, dir,fd,handle):
+        print("... start {} {} {}".format(dir,fd,handle))
+
+    def stop_io_task(self, dir,fd,handle):
+        print("... stop {} {} {}".format(dir,fd,handle))
+
+    def loop_start(self,loop):
+        print("::: loop start %d %d", os.getpid(),id(loop))
+
+    def loop_end(self):
+        print("::: loop end")
+
+    def obj_call(self, obj):
+        print("::: {} exec {}".format(obj._nr, obj))
+
+    def obj_result(self, obj, res):
+        print("::: {} res {}".format(obj._nr, repr(res)))
+        
+    def obj_error(self, obj, res):
+        print("::: {} exc {}".format(obj._nr, repr(res)))
+        
+    def obj_cancel(self, obj):
+        print("::: {} cancel".format(obj._nr))
+        
+        
+
 class TrioPolicy(asyncio.unix_events._UnixDefaultEventLoopPolicy):
     _loop_factory = TrioEventLoop
 
 asyncio.set_event_loop_policy(TrioPolicy())
 if not isinstance(asyncio.get_event_loop(), TrioEventLoop):
     raise ImportError("You imported trio.asyncio too late.")
+

@@ -39,11 +39,15 @@ class EpollWaiters:
 
 
 @attr.s(slots=True, cmp=False, hash=False)
-class EpollIOManager:
+class _EpollIOManager:
     _epoll = attr.ib(default=attr.Factory(select.epoll))
     # {fd: EpollWaiters}
     _registered = attr.ib(default=attr.Factory(dict))
 
+class EpollIOManager(_EpollIOManager):
+    def __init__(self,*a,**k):
+        super().__init__(*a,**k)
+        print("E OPEN",id(self._epoll),a,k)
     def statistics(self):
         tasks_waiting_read = 0
         tasks_waiting_write = 0
@@ -58,7 +62,9 @@ class EpollIOManager:
         )
 
     def close(self):
+        print("E CLOSE",id(self._epoll))
         self._epoll.close()
+        self._registered = ()
 
     # Called internally by the task runner:
     def handle_io(self, timeout):
@@ -84,7 +90,12 @@ class EpollIOManager:
         if flags is None:
             assert currently_registered
             del self._registered[fd]
-            self._epoll.unregister(fd)
+            try:
+                self._epoll.unregister(fd)
+            except ValueError:
+                print("OWCH",id(self._epoll))
+                import pdb;pdb.set_trace()
+                raise
         else:
             if currently_registered:
                 self._epoll.modify(fd, flags)
@@ -109,8 +120,12 @@ class EpollIOManager:
         self._update_registrations(fd, currently_registered)
 
         def abort(_):
-            setattr(self._registered[fd], attr_name, None)
-            self._update_registrations(fd, True)
+            try:
+                setattr(self._registered[fd], attr_name, None)
+            except IndexError:
+                pass
+            else:
+                self._update_registrations(fd, True)
             return _core.Abort.SUCCEEDED
 
         await _core.wait_task_rescheduled(abort)
