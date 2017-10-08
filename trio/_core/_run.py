@@ -761,7 +761,9 @@ class Runner:
 
     def close(self):
         self.io_manager.close()
+        self.io_manager = None
         self.entry_queue.close()
+        self.entry_queue = None
         self.instrument("after_run")
 
     # Methods marked with @_public get converted into functions exported by

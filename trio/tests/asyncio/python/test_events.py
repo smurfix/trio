@@ -70,7 +70,8 @@ def _test_get_event_loop_new_process__sub_proc():
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    return loop.run_until_complete(doit())
+    res = loop.run_until_complete(doit())
+    return res
 
 
 ONLYCERT = data_file('ssl_cert.pem')
