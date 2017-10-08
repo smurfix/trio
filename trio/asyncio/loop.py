@@ -615,6 +615,7 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
                     await self._sync()
             except Exception as exc:
                 logger.exception("Reading %d: Calling %s", fd, handle)
+                raise
             finally:
                 handle._scope = None
                 self._task._runner.instrument("stop_io_task","read",fd,handle)
@@ -681,6 +682,7 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
                     await self._sync()
             except Exception as exc:
                 logger.exception("writing %d: Calling %s", fd, handle)
+                raise
             finally:
                 handle._scope = None
                 self._task._runner.instrument("stop_io_task","write",fd,handle)
@@ -794,6 +796,7 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
                                 )
                             except Exception as exc:
                                 logger.exception("Calling %s:", repr(obj))
+                                raise
                         else:
                             nursery.start_soon(obj._call_async)
                 except Exception as exc:

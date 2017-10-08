@@ -120,12 +120,8 @@ class EpollIOManager(_EpollIOManager):
         self._update_registrations(fd, currently_registered)
 
         def abort(_):
-            try:
-                setattr(self._registered[fd], attr_name, None)
-            except IndexError:
-                pass
-            else:
-                self._update_registrations(fd, True)
+            setattr(self._registered[fd], attr_name, None)
+            self._update_registrations(fd, True)
             return _core.Abort.SUCCEEDED
 
         await _core.wait_task_rescheduled(abort)
