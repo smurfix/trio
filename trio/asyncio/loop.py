@@ -239,11 +239,23 @@ class TrioExecutor:
         if not self._running:  # pragma: no cover
             raise RuntimeError("Executor is down")
         return await trio.run_sync_in_worker_thread(
-            func, *args, limiter=self._limiter
+            self._runner, func, *args, limiter=self._limiter
         )
 
     def shutdown(self, wait=None):
         self._running = False
+
+    def _runner(self, func, *args):
+        import os
+        try:
+            logger.debug("THREAD START %d %s %s", os.getpid(), func, args)
+            res = func(*args)
+        except BaseException as exc:
+            logger.exception("THREAD ERROR %d", os.getpid())
+            raise
+        else:
+            logger.debug("THREAD RES %s %s", os.getpid(), repr(res))
+            return res
 
 
 class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
@@ -784,7 +796,6 @@ class TrioEventLoop(asyncio.unix_events._UnixSelectorEventLoop):
                                 logger.exception("Calling %s:", repr(obj))
                         else:
                             nursery.start_soon(obj._call_async)
-                    raise
                 except Exception as exc:
                     # The asyncio mainloop would swallow this
                     logger.exception("Error in main loop")
