@@ -70,7 +70,7 @@ setup(
     author_email="njs@pobox.com",
     url="https://github.com/python-trio/trio",
     license="MIT -or- Apache License 2.0",
-    packages=find_packages(),
+    packages=find_packages(exclude=["trio.tests"]),
     install_requires=[
         "attrs",
         "sortedcontainers",

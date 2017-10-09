@@ -1,3 +1,9 @@
+trio (0.1.0+dev-4) unstable; urgency=medium
+
+  * don't install the test suite
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Mon, 09 Oct 2017 15:10:34 +0200
+
 trio (0.1.0+dev-3) unstable; urgency=medium
 
   * Fix test invocation
