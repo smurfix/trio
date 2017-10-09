@@ -1,0 +1,33 @@
+Source: trio
+Maintainer: Matthias Urlichs <matthias@urlichs.de>
+Section: python
+Priority: optional
+Build-Depends: dh-python, python3-setuptools, python3-all, debhelper (>= 9)
+Standards-Version: 3.9.6
+Homepage: https://github.com/python-trio/trio
+
+Package: python3-trio
+Architecture: all
+Depends: ${misc:Depends}, ${python3:Depends}
+Description: An async/await-native I/O library for humans and snake peopl
+ .. image:: https://cdn.rawgit.com/python-trio/trio/9b0bec646a31e0d0f67b8b6ecc6939726faf3e17/logo/logo-with-background.svg
+    :width: 200px
+    :align: right
+ .
+ The Trio project's goal is to produce a production-quality, `permissively
+ licensed <https://github.com/python-trio/trio/blob/master/LICENSE>`__,
+ async/await-native I/O library for Python. Like all async libraries,
+ its main purpose is to help you write programs that do **multiple
+ things at the same time** with **parallelized I/O**. A web spider that
+ wants to fetch lots of pages in parallel, a web server that needs to
+ juggle lots of downloads and websocket connections at the same time, a
+ process supervisor monitoring multiple subprocesses... that sort of
+ thing. Compared to other libraries, Trio attempts to distinguish
+ itself with an obsessive focus on **usability** and
+ **correctness**. Concurrency is complicated; we try to make it *easy*
+ to get things *right*.
+ .
+ Trio was built from the ground up to take advantage of the `latest
+ Python features <https://www.python.org/dev/peps/pep-0492/>`__, and
+ draws inspiration from `many sources
+

@@ -1,0 +1,5 @@
+trio (0.1.0+dev-1) unstable; urgency=low
+
+  * source package automatically created by stdeb 0.8.5
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Mon, 09 Oct 2017 11:38:06 +0200
