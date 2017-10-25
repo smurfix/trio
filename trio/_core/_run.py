@@ -90,6 +90,7 @@ class CancelScope:
     _shield = attr.ib(default=False)
     cancel_called = attr.ib(default=False)
     cancelled_caught = attr.ib(default=False)
+    name = attr.ib(default=None)
 
     @contextmanager
     @enable_ki_protection
@@ -179,13 +180,13 @@ class CancelScope:
 
 @contextmanager
 @enable_ki_protection
-def open_cancel_scope(*, deadline=inf, shield=False):
+def open_cancel_scope(*, name=None, deadline=inf, shield=False):
     """Returns a context manager which creates a new cancellation scope.
 
     """
 
     task = _core.current_task()
-    scope = CancelScope()
+    scope = CancelScope(name=name)
     scope._add_task(task)
     scope.deadline = deadline
     scope.shield = shield
@@ -289,8 +290,25 @@ class _TaskStatus:
 
 
 class Nursery:
-    def __init__(self):
+    _name = None
+
+    def __init__(self, *, name=None):
         self._scope_manager = None
+        self._name = name
+
+    def __repr__(self):
+        data = []
+        if self._name is not None:
+            data.append(("name",self._name))
+        if self._children:
+            data.append(("children",len(self._children)))
+        if self._zombies:
+            data.append(("zombies",len(self._zombies)))
+        if self._pending_starts:
+            data.append(("pending",self._pending_starts))
+        return "<%s %s%s>" % (self.__class__.__name__,
+                              "closed " if self.closed else "",
+                              " ".join("%s=%s" % (a,b) for a,b in data))
 
     @enable_ki_protection
     async def __aenter__(self):
@@ -301,7 +319,7 @@ class Nursery:
         parent_task._child_nurseries.append(self)
 
         # my cancel scope; used for cancelling all children.
-        self._scope_manager = open_cancel_scope()
+        self._scope_manager = open_cancel_scope(name=self._name)
         self.cancel_scope = self._scope_manager.__enter__()
 
         # the cancel stack that children inherit - we take a snapshot, so it
@@ -434,7 +452,8 @@ class Nursery:
         # all the different possible states that we have to handle. (Entering
         # with/out an error, with/out unreaped zombies, with/out children
         # living, with/out an error that occurs after we enter, ...)
-        with open_cancel_scope() as clean_up_scope:
+        with open_cancel_scope(name="Cleanup:"+(self._name if self._name is not None else "Cleanup")) \
+                as clean_up_scope:
             if not self._children and not self._zombies:
                 try:
                     await _core.checkpoint()
@@ -1597,7 +1616,7 @@ async def checkpoint():
     :func:`checkpoint`.)
 
     """
-    with open_cancel_scope(deadline=-inf) as scope:
+    with open_cancel_scope(deadline=-inf, name="Checkpoint") as scope:
         await _core.wait_task_rescheduled(lambda _: _core.Abort.SUCCEEDED)
 
 
