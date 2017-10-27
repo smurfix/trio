@@ -1,10 +1,16 @@
-trio (0.1.0+dev-2) smurf; urgency=medium
+trio (0.2.0~dev1) unstable; urgency=medium
+
+  * Some improvements
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Fri, 27 Oct 2017 10:24:26 +0200
+
+trio (0.1.0+dev-2) unstable; urgency=medium
 
   * Ignore .pybuild
 
  -- Matthias Urlichs <matthias@urlichs.de>  Tue, 26 Sep 2017 13:25:14 +0200
 
-trio (0.1.0+dev-1) smurf; urgency=low
+trio (0.1.0+dev-1) unstable; urgency=low
 
   * source package automatically created by stdeb 0.8.5
 
