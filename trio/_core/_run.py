@@ -293,7 +293,10 @@ class _TaskStatus:
 
 
 class Nursery:
-    _name = None
+    closed = None
+    _zombies = None
+    _children = None
+    _pending_starts = None
 
     def __init__(self, *, name=None):
         self._scope_manager = None
