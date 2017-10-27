@@ -194,7 +194,10 @@ def open_cancel_scope(*, name=None, deadline=inf, shield=False):
         with MultiError.catch(scope._exc_filter):
             yield scope
     finally:
-        scope._remove_task(task)
+        try:
+            scope._remove_task(task)
+        except KeyError:
+            pass
 
 
 ################################################################
