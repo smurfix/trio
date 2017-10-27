@@ -16,7 +16,7 @@ __all__ = ["trio_test"]
 # that clock is passed to trio.run().
 def trio_test(fn):
     @wraps(fn)
-    def wrapper(**kwargs):
+    def wrapper(*args, **kwargs):
         __tracebackhide__ = True
         clocks = [c for c in kwargs.values() if isinstance(c, Clock)]
         if not clocks:
@@ -25,6 +25,6 @@ def trio_test(fn):
             clock = clocks[0]
         else:
             raise ValueError("too many clocks spoil the broth!")
-        return _core.run(partial(fn, **kwargs), clock=clock)
+        return _core.run(partial(fn, *args, **kwargs), clock=clock)
 
     return wrapper
