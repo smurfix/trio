@@ -72,7 +72,7 @@ setup(
     author_email="njs@pobox.com",
     url="https://github.com/python-trio/trio",
     license="MIT -or- Apache License 2.0",
-    packages=find_packages(),
+    packages=find_packages(exclude=["trio.tests"]),
     install_requires=[
         "attrs",
         "sortedcontainers",
@@ -94,6 +94,8 @@ setup(
     },
     python_requires=">=3.5",
     keywords=["async", "io", "networking", "trio"],
+    setup_requires=['pytest-runner'],
+    tests_require=['pytest'],
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",

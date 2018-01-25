@@ -15,3 +15,27 @@ trio (0.3.0-1) smurf; urgency=low
   * source package automatically created by stdeb 0.8.5
 
  -- Matthias Urlichs <matthias@urlichs.de>  Mon, 22 Jan 2018 12:19:07 +0100
+
+trio (0.1.0+dev-4) unstable; urgency=medium
+
+  * don't install the test suite
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Mon, 09 Oct 2017 15:10:34 +0200
+
+trio (0.1.0+dev-3) unstable; urgency=medium
+
+  * Fix test invocation
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Mon, 09 Oct 2017 11:41:11 +0200
+
+trio (0.1.0+dev-2) unstable; urgency=medium
+
+  * Fixed packaging
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Mon, 09 Oct 2017 11:39:58 +0200
+
+trio (0.1.0+dev-1) unstable; urgency=low
+
+  * source package automatically created by stdeb 0.8.5
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Mon, 09 Oct 2017 11:38:06 +0200
