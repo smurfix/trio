@@ -657,36 +657,49 @@ signals, thus they tend to confuse the interpreter unless you're careful.
 Trio offers different classes to manage this problem. None of them is
 perfect for every use case.
 
-.. autofunction:: set_child_watcher
+.. autofunction:: child_watcher
 
-Child watchers
-~~~~~~~~~~~~~~
+To protect against inadvertently using a trio-only watcher in a synchronous 
+application, use either of these idioms:
 
-:class:`trio.SafeChildWatcher` and :class:`trio.FastChildWatcher` do not
+* Programs with a trio mainloop::
+
+    async with child_watcher(watcher_cls, _replace=True).async_manager:
+        await your_real_main()
+
+* Programs running in compatibility mode::
+
+    if not child_watcher(watcher_cls, sync=True):
+        raise Runt
+
+Child watcher classes
+~~~~~~~~~~~~~~~~~~~~~
+
+:class:`trio.SafeSigChildWatcher` and :class:`trio.FastSigChildWatcher` do not
 require a Trio mainloop. The downside is that using them carries a slight
 risk that Python will become confused when a task dies at exactly the wrong
 moment.
 
-The difference between these classes is that :class:`trio.SafeChildWatcher`
+The difference between these classes is that :class:`trio.SafeSigChildWatcher`
 polls each process separately. This prevents signals from getting lost but
 is expensive if you have many child processes.
 
-:class:`trio.FastChildWatcher` is faster, but less reliable if other parts
+:class:`trio.FastSigChildWatcher` is faster, but less reliable if other parts
 of your program, or libraries you use, are not careful which processes they
 wait for.
 
-.. autoclass:: trio.SafeChildWatcher
+.. autoclass:: trio.SafeSigChildWatcher
 
-.. autoclass:: trio.FastChildWatcher
+.. autoclass:: trio.FastSigChildWatcher
 
-:class:`trio.SafeTaskedChildWatcher` and
-:class:`trio.FastTaskedChildWatcher` essentially work like their
+:class:`trio.SafeTaskSigChildWatcher` and
+:class:`trio.FastTaskSigChildWatcher` essentially work like their
 counterparts above. They require a running Trio mainloop in order to avoid
 race conditions.
 
-.. autoclass:: trio.SafeTaskedChildWatcher
+.. autoclass:: trio.SafeTaskSigChildWatcher
 
-.. autoclass:: trio.FastTaskedChildWatcher
+.. autoclass:: trio.FastTaskSigChildWatcher
 
 Signals
 -------

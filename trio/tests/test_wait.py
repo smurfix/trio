@@ -20,7 +20,7 @@ def fork_error():
     return pid
 
 # TODO: there's more to life than Unix
-known_watchers = [SafeChildWatcher,SafeTaskedChildWatcher, FastChildWatcher,FastTaskedChildWatcher]
+known_watchers = [SafeSigChildWatcher,SafeTaskSigChildWatcher, FastSigChildWatcher,FastTaskSigChildWatcher]
 timers = (-0.1,-0.01,-0.001, 0, 0.001, 0.01, 0.1)
 
 def idfn(test_mode):
@@ -35,25 +35,36 @@ def test_mode(request):
 def watcher_cls(request):
     yield request.param
 
-async def test_wait_delayed(test_mode, nursery):
-    watcher_cls,timer = test_mode
-    await set_child_watcher(watcher_cls, nursery=nursery, _replace=True)
-    pid = fork_sleep(timer)
-    res = await wait_for_child(pid)
-    assert res == 0
-    assert not _wait._ChildWatcher._callbacks
-    assert not _wait._ChildWatcher._results
-    with pytest.raises(ChildProcessError):
-        os.waitpid(pid, os.WNOHANG)
+async def test_sync_flags():
+    assert SafeSigChildWatcher._sync_ok
+    assert not SafeTaskSigChildWatcher._sync_ok
+    assert FastSigChildWatcher._sync_ok
+    assert not FastTaskSigChildWatcher._sync_ok
 
-async def test_wait_error(watcher_cls, nursery):
-    await set_child_watcher(watcher_cls, nursery=nursery, _replace=True)
-    pid = fork_error()
-    res = await wait_for_child(pid)
-    assert res == 1
-    assert not _wait._ChildWatcher._callbacks
-    assert not _wait._ChildWatcher._results
-    with pytest.raises(ChildProcessError):
-        os.waitpid(pid, os.WNOHANG)
+    with pytest.raises(RuntimeError):
+        child_watcher(FastTaskSigChildWatcher, _replace=True, sync=True)
+    with pytest.raises(RuntimeError):
+        child_watcher(SafeTaskSigChildWatcher, _replace=True, sync=True)
+
+async def test_wait_delayed(test_mode):
+    watcher_cls,timer = test_mode
+    async with child_watcher(watcher_cls, _replace=True).async_manager as watcher:
+        pid = fork_sleep(timer)
+        res = await wait_for_child(pid)
+        assert res == 0
+        assert not watcher._data
+        assert not watcher._results
+        with pytest.raises(ChildProcessError):
+            os.waitpid(pid, os.WNOHANG)
+
+async def test_wait_error(watcher_cls):
+    async with child_watcher(watcher_cls, _replace=True).async_manager as watcher:
+        pid = fork_error()
+        res = await wait_for_child(pid)
+        assert res == 1
+        assert not watcher._data
+        assert not watcher._results
+        with pytest.raises(ChildProcessError):
+            os.waitpid(pid, os.WNOHANG)
 
 
