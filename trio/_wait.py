@@ -15,9 +15,11 @@ from . import _sync
 
 __all__ = ["NOT_FOUND"]
 
+
 def _add_to_all(obj):
     __all__.append(obj.__name__)
     return obj
+
 
 # Waiting strategies:
 #
@@ -26,18 +28,23 @@ def _add_to_all(obj):
 # - Linux: signalfd for SIGCHLD, a blocking thread per process, or a signal handler running wait4().
 #
 # - MacOS/'BSD: kqueue.
-# 
+#
+
 
 # Special status / return code for a process that doesn't exist
 class NOT_FOUND:
     pass
+
+
 NOT_FOUND_VALUE = _core.Error(ChildProcessError())
 
 _ChildWatcher = None
 
+
 class UnknownStatusError(RuntimeError):
     """I can't interpret this exit code."""
     pass
+
 
 def _compute_returncode(status):
     if status is NOT_FOUND:
@@ -51,6 +58,7 @@ def _compute_returncode(status):
     else:
         # This shouldn't happen.
         return _core.Error(UnknownStatusError(pid, status))
+
 
 @attr.s(cmp=False)
 class _ChildWatcherEntry:
@@ -86,7 +94,10 @@ class _ChildWatcherEntry:
     async def __aenter__(self):
         do_setup = False
         if self._did_setup is None:
-            raise RuntimeError("Re-using %s for %d. Locking problem?" % (self.__class__.__name__, self.pid))
+            raise RuntimeError(
+                "Re-using %s for %d. Locking problem?" %
+                (self.__class__.__name__, self.pid)
+            )
         with self._lock:
             self.users += 1
             if not self._did_setup:
@@ -150,6 +161,7 @@ class _ChildWatcherEntry:
         if self.result in {None, NOT_FOUND_VALUE}:
             self.result = _compute_returncode(status)
 
+
 @_add_to_all
 class BaseChildWatcher:
     """Base code for "how to wait for child processes to exit".
@@ -160,7 +172,7 @@ class BaseChildWatcher:
 
     _sync_ok = False
 
-    _entry_type = None # override me
+    _entry_type = None  # override me
 
     def __init__(self):
         """Set up the watcher.
@@ -168,9 +180,9 @@ class BaseChildWatcher:
         Some watchers will not work until you also call their :meth:`init`
         method asynchronously.
         """
-        self._lock = threading.Lock() # to protect _data
-        self._data = {} # pid => ChildWatcherEntry
-        self._results = {} # pid => not-yet-awaited result
+        self._lock = threading.Lock()  # to protect _data
+        self._data = {}  # pid => ChildWatcherEntry
+        self._results = {}  # pid => not-yet-awaited result
 
         self._attach()
 
@@ -196,7 +208,9 @@ class BaseChildWatcher:
         with self._lock:
             for record in self._data.values():
                 if record.result is None:
-                    record.result = _core.Error(RuntimeError("Child watcher got cancelled"))
+                    record.result = _core.Error(
+                        RuntimeError("Child watcher got cancelled")
+                    )
                 record.event.set()
 
     def _detach(self):
@@ -241,15 +255,16 @@ class BaseChildWatcher:
         not be overridden.
         """
         with self._lock:
-            record = self._data.get(pid,None)
+            record = self._data.get(pid, None)
             if record is not None:
                 if record.token != token:
-                    raise RuntimeError("You can't watch a child from multiple Trio loops")
+                    raise RuntimeError(
+                        "You can't watch a child from multiple Trio loops"
+                    )
                 record.users += 1
             else:
                 self._data[pid] = record = self._entry_type(pid=pid)
         return record
-
 
     async def wait_for_child(self, pid):
         """Wait for a child process to end.
@@ -268,7 +283,9 @@ class BaseChildWatcher:
                 record._set(result)
             elif record.result is None:
                 if record.token != _core.current_trio_token():
-                    raise RuntimeError("You can't watch a child from multiple Trio loops")
+                    raise RuntimeError(
+                        "You can't watch a child from multiple Trio loops"
+                    )
                 self._waitpid(pid)
                 await record.event.wait()
             return record.result.unwrap()
@@ -324,6 +341,7 @@ class BaseChildWatcher:
         """No-op. You can use this watcher without the manager."""
         await yield_(self)
 
+
 @_add_to_all
 class SafeSigChildWatcher(BaseChildWatcher):
     """Attach using SIGCHLD. Poll.
@@ -346,11 +364,14 @@ class SafeSigChildWatcher(BaseChildWatcher):
         Raises:
             whatever exception is appropriate.
         """
-        
+
         current_sig = signal.signal(signal.SIGCHLD, self._signal_handler)
         if current_sig != self._signal_handler:
-            self._signal_handler() # run the thing
-            raise RuntimeError("%s: SIGCHLD handler was %s" % (self.__class__.__name__, repr(current_sig)))
+            self._signal_handler()  # run the thing
+            raise RuntimeError(
+                "%s: SIGCHLD handler was %s" %
+                (self.__class__.__name__, repr(current_sig))
+            )
 
     def _attach(self):
         """Attach the signal handler.
@@ -386,6 +407,7 @@ class FastSigChildWatcher(SafeSigChildWatcher):
     Warning:
         doing signal handling this way is inherently unsafe.
     """
+
     def _process_signal(self):
         while True:
             try:
@@ -399,6 +421,7 @@ class FastSigChildWatcher(SafeSigChildWatcher):
                     return
 
                 self._record(pid, status)
+
 
 class _TaskWatcher:
     """
@@ -442,6 +465,7 @@ class _TaskWatcher:
     def _signal_handler(self, *args):
         self._token.run_sync_soon(self._process_signal)
 
+
 @_add_to_all
 class FastTaskSigChildWatcher(_TaskWatcher, FastSigChildWatcher):
     """Attach using SIGCHLD. Poll.
@@ -454,6 +478,7 @@ class FastTaskSigChildWatcher(_TaskWatcher, FastSigChildWatcher):
     """
     pass
 
+
 @_add_to_all
 class SafeTaskSigChildWatcher(_TaskWatcher, SafeSigChildWatcher):
     """Attach using SIGCHLD. Poll.
@@ -465,6 +490,7 @@ class SafeTaskSigChildWatcher(_TaskWatcher, SafeSigChildWatcher):
     """
     pass
 
+
 # TODO
 #class _SignalFdWatcher(_TaskWatcher):
 #    """
@@ -473,15 +499,18 @@ class SafeTaskSigChildWatcher(_TaskWatcher, SafeSigChildWatcher):
 #    Only available on Linux.
 #    """
 
+
 @_add_to_all
-def child_watcher(watcher_cls=None, *args, sync=False, _replace=False, **kwargs):
+def child_watcher(
+    watcher_cls=None, *args, sync=False, _replace=False, **kwargs
+):
     """Set the class that's to be used for watching child processes.
 
     There can only be one child watcher per program. Subsequent calls
-    to :proc:`child_watcher` will have no effect and return ``None``.
+    to :function:`child_watcher` will have no effect and return ``None``.
 
     A default watcher will be instantiated upon the first call to
-    :proc:`wait_for_child`.
+    :function:`wait_for_child`.
 
     Args:
         watcher_cls:
@@ -530,10 +559,13 @@ def child_watcher(watcher_cls=None, *args, sync=False, _replace=False, **kwargs)
         watcher_cls = SafeSigChildWatcher
 
     if sync and not watcher_cls._sync_ok:
-        raise RuntimeError("'%s' requires a Trio context." % watcher_cls.__name__)
+        raise RuntimeError(
+            "'%s' requires a Trio context." % watcher_cls.__name__
+        )
 
     _ChildWatcher = watcher_cls(*args, **kwargs)
     return _ChildWatcher
+
 
 @_add_to_all
 async def wait_for_child(pid):
@@ -551,13 +583,14 @@ async def wait_for_child(pid):
         await child_watcher(sync=True)
     return await _ChildWatcher.wait_for_child(pid)
 
+
 @_add_to_all
 async def check_child_watcher():
     """
     Check if a child watcher is installed and whether it is active.
     
     Returns:
-        A boolean; if False, :proc:`child_watcher()` will be effective.
+        A boolean; if False, :function:`child_watcher()` will be effective.
 
     Raises:
         RuntimeError or similar, if a problem is identified.
@@ -566,6 +599,7 @@ async def check_child_watcher():
         return False
     await _ChildWatcher.check()
     return True
+
 
 @_add_to_all
 async def scan_children():
@@ -580,4 +614,3 @@ async def scan_children():
     if _ChildWatcher is None:
         return False
     return await _ChildWatcher.scan()
-
