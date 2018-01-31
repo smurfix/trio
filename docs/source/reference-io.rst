@@ -635,8 +635,58 @@ Asynchronous file objects
 Subprocesses
 ------------
 
-`Not implemented yet! <https://github.com/python-trio/trio/issues/4>`__
+Starting a subprocess is `not implemented yet. <https://github.com/python-trio/trio/issues/4>`__
+Thus, you're still on your own here.
 
+The second part of working with subprocesses is to stop them or, more
+precisely (since stopping is already covered by :func:`os.kill`), discover when they ended.
+
+There are a couple of ways to do this, but none work universally, or even
+on every operating system.
+
+.. currentmodule:: trio
+
+The easy part is how to wait for a child process. That's universal:
+
+.. autofunction:: wait_for_child
+
+The hard part is how to handle the underpinnings. Traditionally, Unix does
+this with signals. The problem is that Python doesn't have a way to block
+signals, thus they tend to confuse the interpreter unless you're careful.
+
+Trio offers different classes to manage this problem. None of them is
+perfect for every use case.
+
+.. autofunction:: set_child_watcher
+
+Child watchers
+~~~~~~~~~~~~~~
+
+:class:`trio.SafeChildWatcher` and :class:`trio.FastChildWatcher` do not
+require a Trio mainloop. The downside is that using them carries a slight
+risk that Python will become confused when a task dies at exactly the wrong
+moment.
+
+The difference between these classes is that :class:`trio.SafeChildWatcher`
+polls each process separately. This prevents signals from getting lost but
+is expensive if you have many child processes.
+
+:class:`trio.FastChildWatcher` is faster, but less reliable if other parts
+of your program, or libraries you use, are not careful which processes they
+wait for.
+
+.. autoclass:: trio.SafeChildWatcher
+
+.. autoclass:: trio.FastChildWatcher
+
+:class:`trio.SafeTaskedChildWatcher` and
+:class:`trio.FastTaskedChildWatcher` essentially work like their
+counterparts above. They require a running Trio mainloop in order to avoid
+race conditions.
+
+.. autoclass:: trio.SafeTaskedChildWatcher
+
+.. autoclass:: trio.FastTaskedChildWatcher
 
 Signals
 -------
@@ -645,3 +695,4 @@ Signals
 
 .. autofunction:: catch_signals
    :with: batched_signal_aiter
+

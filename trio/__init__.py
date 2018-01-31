@@ -38,6 +38,9 @@ __all__ += _highlevel_socket.__all__
 from ._file_io import *
 __all__ += _file_io.__all__
 
+from ._wait import *
+__all__ += _wait.__all__
+
 from ._path import *
 __all__ += _path.__all__
 
