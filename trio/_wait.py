@@ -216,7 +216,7 @@ class BaseChildWatcher:
     def _detach(self):
         pass
 
-    async def check(self):
+    def check(self):
         """Check if the watcher is still attached / working properly.
         
         This method may silently fix problems if it can do so without
@@ -301,14 +301,19 @@ class BaseChildWatcher:
         so it does as little as possible.
         """
         try:
+            #os.write(2,b"SIGI RECORD A\n")
             record = self._data[pid]
         except KeyError:
             # may be a zombie, or it is not yet waited for.
+            #os.write(2,b"SIGI RECORD S\n")
             self._results[pid] = status
         else:
+            #os.write(2,b"SIGI RECORD T\n")
             record.set(status)
+            #os.write(2,b"SIGI RECORD U\n")
 
     def _waitpid(self, pid):
+        #os.write(2,b"SIGI WAITPID A %d\n"%pid)
         """Check whether a child process is still alive.
         If it has died since the last check, record its exit status.
 
@@ -323,15 +328,18 @@ class BaseChildWatcher:
         try:
             pid, status = os.waitpid(pid, os.WNOHANG)
         except ChildProcessError:
+            #os.write(2,b"SIGI WAITPID E\n")
             # The child process may already be reaped
             # (may happen if waitpid() is called elsewhere).
             status = NOT_FOUND
         else:
+            #os.write(2,b"SIGI WAITPID R %d %d\n"%(pid,status))
             if pid == 0:
                 # The child process is still alive.
                 return True
 
         self._record(pid, status)
+        #os.write(2,b"SIGI WAITPID Z\n")
         return False
 
     @property
@@ -358,7 +366,7 @@ class SafeSigChildWatcher(BaseChildWatcher):
 
     _orig_sig = None
 
-    async def check(self):
+    def check(self):
         """Check if the watcher is still attached / working properly.
         
         Raises:
@@ -368,16 +376,18 @@ class SafeSigChildWatcher(BaseChildWatcher):
         current_sig = signal.signal(signal.SIGCHLD, self._signal_handler)
         if current_sig != self._signal_handler:
             self._signal_handler()  # run the thing
-            raise RuntimeError(
-                "%s: SIGCHLD handler was %s" %
-                (self.__class__.__name__, repr(current_sig))
-            )
+            if False:
+                raise RuntimeError(
+                    "%s: SIGCHLD handler was %s" %
+                    (self.__class__.__name__, repr(current_sig))
+                )
 
     def _attach(self):
         """Attach the signal handler.
 
         Override to do nothing if your watcher is not signal-based.
         """
+        #os.write(2,b"SIGI ATTA A\n")
         self._orig_sig = signal.signal(signal.SIGCHLD, self._signal_handler)
 
     def _detach(self):
@@ -385,10 +395,13 @@ class SafeSigChildWatcher(BaseChildWatcher):
 
         Override to do nothing if your watcher is not signal-based.
         """
+        #os.write(2,b"SIGI DETA A\n")
         signal.signal(signal.SIGCHLD, self._orig_sig)
 
     def _signal_handler(self, *args):
+        #os.write(2,b"SIGI HAND A\n")
         self._process_signal()
+        #os.write(2,b"SIGI HAND Z\n")
 
     def _process_signal(self):
         for pid in list(self._data):
@@ -585,7 +598,7 @@ async def wait_for_child(pid):
 
 
 @_add_to_all
-async def check_child_watcher():
+def check_child_watcher():
     """
     Check if a child watcher is installed and whether it is active.
     
@@ -597,7 +610,7 @@ async def check_child_watcher():
     """
     if _ChildWatcher is None:
         return False
-    await _ChildWatcher.check()
+    _ChildWatcher.check()
     return True
 
 
