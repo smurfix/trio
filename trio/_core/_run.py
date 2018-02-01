@@ -794,7 +794,6 @@ class Runner:
                     .format(coro)
                 )
             # Give good error for: nursery.start_soon(some_sync_fn)
-            import pdb;pdb.set_trace()
             raise TypeError(
                 "trio expected an async function, but {!r} appears to be "
                 "synchronous"
