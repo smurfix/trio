@@ -17,7 +17,7 @@ def test_Result():
     assert e.error is exc
     with pytest.raises(RuntimeError):
         e.unwrap()
-    assert repr(e) == "Error(RuntimeError('oops',))"
+    assert repr(e).replace("',))","'))") == "Error(RuntimeError('oops'))"
 
     with pytest.raises(TypeError):
         Error("hello")

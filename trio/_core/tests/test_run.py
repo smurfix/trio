@@ -1555,19 +1555,19 @@ def test_nice_error_on_bad_calls_to_run_or_spawn():
 
             with pytest.raises(TypeError) as excinfo:
                 bad_call(asyncio.sleep(1))
-            assert "asyncio" in str(excinfo.value)
+            assert "async" in str(excinfo.value)
 
             with pytest.raises(TypeError) as excinfo:
                 bad_call(asyncio.Future())
-            assert "asyncio" in str(excinfo.value)
+            assert "async" in str(excinfo.value)
 
             with pytest.raises(TypeError) as excinfo:
                 bad_call(asyncio.sleep, 1)
-            assert "asyncio" in str(excinfo.value)
+            assert "async" in str(excinfo.value)
 
             with pytest.raises(TypeError) as excinfo:
                 bad_call(lambda: asyncio.Future())
-            assert "asyncio" in str(excinfo.value)
+            assert "async" in str(excinfo.value)
 
             with pytest.raises(TypeError) as excinfo:
                 bad_call(Deferred())
