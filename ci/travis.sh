@@ -2,9 +2,7 @@
 
 set -ex
 
-# 0.20.0 is broken (https://github.com/google/yapf/issues/484)
-# The fix has been merged so hopefully 0.21.0 will be usable again
-YAPF_VERSION=0.19.0
+YAPF_VERSION=0.20.1
 
 git rev-parse HEAD
 
@@ -26,10 +24,13 @@ if [ "$USE_PYPY_NIGHTLY" = "1" ]; then
     # something like "pypy-c-jit-89963-748aa3022295-linux64"
     PYPY_DIR=$(echo pypy-c-jit-*)
     PYTHON_EXE=$PYPY_DIR/bin/pypy3
-    ($PYTHON_EXE -m ensurepip \
-     && $PYTHON_EXE -m pip install virtualenv \
-     && $PYTHON_EXE -m virtualenv testenv) \
-        || (echo "pypy nightly is broken; skipping tests"; exit 0)
+
+    if ! ($PYTHON_EXE -m ensurepip \
+              && $PYTHON_EXE -m pip install virtualenv \
+              && $PYTHON_EXE -m virtualenv testenv); then
+        echo "pypy nightly is broken; skipping tests"
+        exit 0
+    fi
     source testenv/bin/activate
 fi
 

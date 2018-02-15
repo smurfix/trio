@@ -383,8 +383,10 @@ class Nursery:
         self.cancel_scope.cancel()
 
     def _check_nursery_closed(self):
-        if (not self._nested_child_running and not self._children
-                and not self._pending_starts):
+        if (
+            not self._nested_child_running and not self._children
+            and not self._pending_starts
+        ):
             self._closed = True
             if self._parent_waiting_in_aexit:
                 self._parent_waiting_in_aexit = False
@@ -766,7 +768,7 @@ class Runner:
                     .format(async_fn=async_fn)
                 ) from None
 
-            # Give good error for: nursery.start_soon(asyncio.sleep(1))
+            # Give good error for: nursery.start_soon(future)
             if _return_value_looks_like_wrong_library(async_fn):
                 raise TypeError(
                     "trio was expecting an async function, but instead it got "
@@ -790,7 +792,7 @@ class Runner:
             # is overkill.
             pass
         elif not inspect.iscoroutine(coro):
-            # Give good error for: nursery.start_soon(asyncio.sleep, 1)
+            # Give good error for: nursery.start_soon(func_returning_future)
             if _return_value_looks_like_wrong_library(coro):
                 raise TypeError(
                     "start_soon got unexpected {!r} – are you trying to use a "
@@ -1484,8 +1486,10 @@ async def checkpoint_if_cancelled():
 
     """
     task = current_task()
-    if (task._pending_cancel_scope() is not None or
-        (task is task._runner.main_task and task._runner.ki_pending)):
+    if (
+        task._pending_cancel_scope() is not None or
+        (task is task._runner.main_task and task._runner.ki_pending)
+    ):
         await _core.checkpoint()
         assert False  # pragma: no cover
     task._cancel_points += 1

@@ -2,7 +2,9 @@
 
 import os
 import sys
+import pathlib
 from functools import wraps
+import typing as t
 
 import async_generator
 
@@ -14,11 +16,8 @@ import async_generator
 from . import _core
 
 __all__ = [
-    "signal_raise",
-    "aiter_compat",
-    "acontextmanager",
-    "ConflictDetector",
-    "fixup_module_metadata",
+    "signal_raise", "aiter_compat", "acontextmanager", "ConflictDetector",
+    "fixup_module_metadata", "fspath"
 ]
 
 # Equivalent to the C function raise(), which Python doesn't wrap
@@ -59,6 +58,7 @@ if os.name == "nt":
     # - generating synthetic signals for tests
     # and for both of those purposes, 'raise' works fine.
     import cffi
+
     _ffi = cffi.FFI()
     _ffi.cdef("int raise(int);")
     _lib = _ffi.dlopen("api-ms-win-crt-runtime-l1-1-0.dll")
@@ -133,8 +133,11 @@ class _AsyncGeneratorContextManager:
                 # Likewise, avoid suppressing if a StopIteration exception
                 # was passed to throw() and later wrapped into a RuntimeError
                 # (see PEP 479).
-                if (isinstance(value, (StopIteration, StopAsyncIteration))
-                        and exc.__cause__ is value):
+                if (
+                    isinstance(value,
+                               (StopIteration, StopAsyncIteration))
+                    and exc.__cause__ is value
+                ):
                     return False
                 raise
             except:
@@ -253,3 +256,51 @@ def fixup_module_metadata(module_name, namespace):
     for objname in namespace["__all__"]:
         obj = namespace[objname]
         fix_one(obj)
+
+
+# This is based on the PEP 519 fspath implementation.
+# The function has been adapted to work with pathlib objects on python 3.5
+# The input typehint is removed as there is no os.PathLike on 3.5.
+# See: https://www.python.org/dev/peps/pep-0519/#os
+
+
+def fspath(path) -> t.Union[str, bytes]:
+    """Return the string representation of the path.
+
+    If str or bytes is passed in, it is returned unchanged. If a pre-python 3.6
+    pathlib object is passed, its string representation is returned. If
+    __fspath__() returns something other than str or bytes then TypeError is
+    raised. If this function is given something that is not str, bytes,
+    pathlib.PurePath or os.PathLike then TypeError is raised.
+    """
+    if isinstance(path, (str, bytes)):
+        return path
+
+    # Work from the object's type to match method resolution of other magic
+    # methods.
+    path_type = type(path)
+    try:
+        path = path_type.__fspath__(path)
+    except AttributeError:
+        if hasattr(path_type, '__fspath__'):
+            raise
+        # On python 3.5 pathlib objects don't have an __fspath__ method.
+        # but we still want to get their string representation.
+        if isinstance(path, pathlib.PurePath):
+            return str(path)
+    else:
+        if isinstance(path, (str, bytes)):
+            return path
+        else:
+            raise TypeError(
+                "expected __fspath__() to return str or bytes, "
+                "not " + type(path).__name__
+            )
+
+    raise TypeError(
+        "expected str, bytes or os.PathLike object, not " + path_type.__name__
+    )
+
+
+if hasattr(os, "fspath"):
+    fspath = os.fspath

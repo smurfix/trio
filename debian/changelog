@@ -1,16 +1,22 @@
-trio (0.3.0-3) smurf; urgency=medium
+trio (0.3.0+dev1-a72e471-1) unstable; urgency=medium
+
+  * Merge Upstream
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Thu, 15 Feb 2018 06:59:16 +0100
+
+trio (0.3.0-3) unstable; urgency=medium
 
   * no test (until pytest-trio gets fixed)
 
  -- Matthias Urlichs <matthias@urlichs.de>  Thu, 25 Jan 2018 12:03:37 +0100
 
-trio (0.3.0-2) smurf; urgency=medium
+trio (0.3.0-2) unstable; urgency=medium
 
   * Ignore .pybuild subdirectory
 
  -- Matthias Urlichs <matthias@urlichs.de>  Mon, 22 Jan 2018 12:32:54 +0100
 
-trio (0.3.0-1) smurf; urgency=low
+trio (0.3.0-1) unstable; urgency=low
 
   * source package automatically created by stdeb 0.8.5
 

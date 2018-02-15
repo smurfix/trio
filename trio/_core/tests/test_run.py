@@ -185,9 +185,8 @@ def test_main_and_task_both_crash():
     with pytest.raises(_core.MultiError) as excinfo:
         _core.run(main)
     print(excinfo.value)
-    assert set(type(exc) for exc in excinfo.value.exceptions) == {
-        ValueError, KeyError
-    }
+    assert set(type(exc)
+               for exc in excinfo.value.exceptions) == {ValueError, KeyError}
 
 
 def test_two_child_crashes():
@@ -201,9 +200,8 @@ def test_two_child_crashes():
 
     with pytest.raises(_core.MultiError) as excinfo:
         _core.run(main)
-    assert set(type(exc) for exc in excinfo.value.exceptions) == {
-        ValueError, KeyError
-    }
+    assert set(type(exc)
+               for exc in excinfo.value.exceptions) == {ValueError, KeyError}
 
 
 async def test_child_crash_wakes_parent():
@@ -1203,8 +1201,10 @@ async def test_TrioToken_run_sync_soon_idempotent():
         for i in range(100):
             token.run_sync_soon(cb, i, idempotent=True)
     await wait_all_tasks_blocked()
-    if (sys.version_info < (3, 6)
-            and platform.python_implementation() == "CPython"):
+    if (
+        sys.version_info < (3, 6)
+        and platform.python_implementation() == "CPython"
+    ):
         # no order guarantees
         record.sort()
     # Otherwise, we guarantee FIFO
@@ -1553,8 +1553,12 @@ def test_nice_error_on_bad_calls_to_run_or_spawn():
 
             import asyncio
 
+            @asyncio.coroutine
+            def generator_based_coro():  # pragma: no cover
+                yield from asyncio.sleep(1)
+
             with pytest.raises(TypeError) as excinfo:
-                bad_call(asyncio.sleep(1))
+                bad_call(generator_based_coro())
             assert "asyncio" in str(excinfo.value)
 
             with pytest.raises(TypeError) as excinfo:
@@ -1562,7 +1566,7 @@ def test_nice_error_on_bad_calls_to_run_or_spawn():
             assert "asyncio" in str(excinfo.value)
 
             with pytest.raises(TypeError) as excinfo:
-                bad_call(asyncio.sleep, 1)
+                bad_call(generator_based_coro)
             assert "asyncio" in str(excinfo.value)
 
             with pytest.raises(TypeError) as excinfo:
