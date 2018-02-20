@@ -486,25 +486,6 @@ def test_format_exception():
     )
 
 
-def test_logging(caplog):
-    exc1 = get_exc(raiser1)
-    exc2 = get_exc(raiser2)
-
-    m = MultiError([exc1, exc2])
-
-    message = "test test test"
-    try:
-        raise m
-    except MultiError as exc:
-        logging.getLogger().exception(message)
-        # Join lines together
-        formatted = "".join(
-            format_exception(type(exc), exc, exc.__traceback__)
-        )
-        assert message in caplog.text
-        assert formatted in caplog.text
-
-
 def run_script(name, use_ipython=False):
     import trio
     trio_path = Path(trio.__file__).parent.parent

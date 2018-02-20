@@ -96,24 +96,6 @@ async def test_serve_listeners_accept_unrecognized_error():
         assert excinfo.value is error
 
 
-async def test_serve_listeners_accept_capacity_error(autojump_clock, caplog):
-    listener = MemoryListener()
-
-    async def raise_EMFILE():
-        raise OSError(errno.EMFILE, "out of file descriptors")
-
-    listener.accept_hook = raise_EMFILE
-
-    # It retries every 100 ms, so in 950 ms it will retry at 0, 100, ..., 900
-    # = 10 times total
-    with trio.move_on_after(0.950):
-        await trio.serve_listeners(None, [listener])
-
-    assert len(caplog.records) == 10
-    for record in caplog.records:
-        assert "retrying" in record.msg
-        assert record.exc_info[1].errno == errno.EMFILE
-
 
 async def test_serve_listeners_connection_nursery(autojump_clock):
     listener = MemoryListener()
