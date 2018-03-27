@@ -24,22 +24,13 @@ if [ "$USE_PYPY_NIGHTLY" = "1" ]; then
     # something like "pypy-c-jit-89963-748aa3022295-linux64"
     PYPY_DIR=$(echo pypy-c-jit-*)
     PYTHON_EXE=$PYPY_DIR/bin/pypy3
-    ($PYTHON_EXE -m ensurepip \
-     && $PYTHON_EXE -m pip install virtualenv \
-     && $PYTHON_EXE -m virtualenv testenv) \
-        || (echo "pypy nightly is broken; skipping tests"; exit 0)
-    source testenv/bin/activate
-fi
 
-if [ "$USE_PYPY_RELEASE" = "1" ]; then
-    curl -fLo pypy.tar.bz2 https://bitbucket.org/squeaky/portable-pypy/downloads/pypy3.5-5.8-beta-linux_x86_64-portable.tar.bz2
-    tar xaf pypy.tar.bz2
-    # something like "pypy3.5-5.7.1-beta-linux_x86_64-portable"
-    PYPY_DIR=$(echo pypy3.5-*)
-    PYTHON_EXE=$PYPY_DIR/bin/pypy3
-    $PYTHON_EXE -m ensurepip
-    $PYTHON_EXE -m pip install virtualenv
-    $PYTHON_EXE -m virtualenv testenv
+    if ! ($PYTHON_EXE -m ensurepip \
+              && $PYTHON_EXE -m pip install virtualenv \
+              && $PYTHON_EXE -m virtualenv testenv); then
+        echo "pypy nightly is broken; skipping tests"
+        exit 0
+    fi
     source testenv/bin/activate
 fi
 

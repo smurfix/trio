@@ -1,25 +1,23 @@
-import threading
-import sys
-import time
-from math import inf
-import platform
 import functools
+import platform
+import sys
+import threading
+import time
 import warnings
 from contextlib import contextmanager
-import gc
+from math import inf
 
-import pytest
 import attr
+import pytest
 
 from .tutil import check_sequence_matches, gc_collect_harder
+from ... import _core
+from ..._timeouts import sleep
 from ...testing import (
     wait_all_tasks_blocked,
     Sequencer,
     assert_checkpoints,
 )
-from ..._timeouts import sleep
-
-from ... import _core
 
 
 # slightly different from _timeouts.sleep_forever because it returns the value
@@ -275,6 +273,11 @@ async def test_current_task():
 
     async with _core.open_nursery() as nursery:
         nursery.start_soon(child)
+
+
+async def test_root_task():
+    root = _core.current_root_task()
+    assert root.parent_nursery is None
 
 
 def test_out_of_context():
@@ -1553,8 +1556,12 @@ def test_nice_error_on_bad_calls_to_run_or_spawn():
 
             import asyncio
 
+            @asyncio.coroutine
+            def generator_based_coro():  # pragma: no cover
+                yield from asyncio.sleep(1)
+
             with pytest.raises(TypeError) as excinfo:
-                bad_call(asyncio.sleep(1))
+                bad_call(generator_based_coro())
             assert "asyncio" in str(excinfo.value)
 
             with pytest.raises(TypeError) as excinfo:
@@ -1562,7 +1569,7 @@ def test_nice_error_on_bad_calls_to_run_or_spawn():
             assert "asyncio" in str(excinfo.value)
 
             with pytest.raises(TypeError) as excinfo:
-                bad_call(asyncio.sleep, 1)
+                bad_call(generator_based_coro)
             assert "asyncio" in str(excinfo.value)
 
             with pytest.raises(TypeError) as excinfo:

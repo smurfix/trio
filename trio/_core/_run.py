@@ -678,6 +678,15 @@ class Runner:
         """
         return self.clock
 
+    @_public
+    def current_root_task(self):
+        """Returns the current root :class:`Task`.
+        
+        This is the task that is the ultimate parent of all other tasks.
+
+        """
+        return self.init_task
+
     ################
     # Core task handling primitives
     ################
@@ -768,7 +777,7 @@ class Runner:
                     .format(async_fn=async_fn)
                 ) from None
 
-            # Give good error for: nursery.start_soon(asyncio.sleep(1))
+            # Give good error for: nursery.start_soon(future)
             if _return_value_looks_like_wrong_library(async_fn):
                 raise TypeError(
                     "trio was expecting an async function, but instead it got "
@@ -785,7 +794,7 @@ class Runner:
         # function. So we have to just call it and then check whether the
         # result is a coroutine object.
         if not inspect.iscoroutine(coro):
-            # Give good error for: nursery.start_soon(asyncio.sleep, 1)
+            # Give good error for: nursery.start_soon(func_returning_future)
             if _return_value_looks_like_wrong_library(coro):
                 raise TypeError(
                     "start_soon got unexpected {!r} – are you trying to use a "
@@ -994,7 +1003,7 @@ class Runner:
         time.
 
         If there are multiple tasks blocked in :func:`wait_all_tasks_blocked`,
-        then the one with the shortest ``cushion`` is the one woken (and the
+        then the one with the shortest ``cushion`` is the one woken (and
         this task becoming unblocked resets the timers for the remaining
         tasks). If there are multiple tasks that have exactly the same
         ``cushion``, then the one with the lowest ``tiebreaker`` value is
