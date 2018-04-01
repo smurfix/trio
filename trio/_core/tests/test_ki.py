@@ -6,11 +6,13 @@ import threading
 import contextlib
 import time
 
-from async_generator import async_generator, yield_, isasyncgenfunction
+from async_generator import (
+    async_generator, yield_, isasyncgenfunction, asynccontextmanager
+)
 
 from ... import _core
 from ...testing import wait_all_tasks_blocked
-from ..._util import acontextmanager, signal_raise
+from ..._util import signal_raise, is_main_thread
 from ..._timeouts import sleep
 from .tutil import slow
 
@@ -182,16 +184,16 @@ async def test_agen_protection():
         async for _ in agen_fn():
             assert not _core.currently_ki_protected()
 
-        # acontextmanager insists that the function passed must itself be an
+        # asynccontextmanager insists that the function passed must itself be an
         # async gen function, not a wrapper around one
         if isasyncgenfunction(agen_fn):
-            async with acontextmanager(agen_fn)():
+            async with asynccontextmanager(agen_fn)():
                 assert not _core.currently_ki_protected()
 
             # Another case that's tricky due to:
             #   https://bugs.python.org/issue29590
             with pytest.raises(KeyError):
-                async with acontextmanager(agen_fn)():
+                async with asynccontextmanager(agen_fn)():
                     raise KeyError
 
 
@@ -439,6 +441,29 @@ def test_ki_is_good_neighbor():
         signal.signal(signal.SIGINT, orig)
 
 
+# Regression test for #461
+def test_ki_with_broken_threads():
+    thread = threading.main_thread()
+
+    # scary!
+    original = threading._active[thread.ident]
+
+    # put this in a try finally so we don't have a chance of cascading a
+    # breakage down to everything else
+    try:
+        del threading._active[thread.ident]
+
+        @_core.enable_ki_protection
+        async def inner():
+            assert signal.getsignal(
+                signal.SIGINT
+            ) != signal.default_int_handler
+
+        _core.run(inner)
+    finally:
+        threading._active[thread.ident] = original
+
+
 # For details on why this test is non-trivial, see:
 #   https://github.com/python-trio/trio/issues/42
 #   https://github.com/python-trio/trio/issues/109
@@ -448,7 +473,7 @@ def test_ki_is_good_neighbor():
 # the main loop... but currently that test would fail (see gh-109 again).
 @slow
 def test_ki_wakes_us_up():
-    assert threading.current_thread() == threading.main_thread()
+    assert is_main_thread()
 
     # This test is flaky due to a race condition on Windows; see:
     #   https://github.com/python-trio/trio/issues/119

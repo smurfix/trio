@@ -28,11 +28,19 @@ sys.path.insert(0, os.path.abspath('../..'))
 nitpicky = True
 # Except for these ones, which we expect to point to unknown targets:
 nitpick_ignore = [
-    ("py:obj", "CapacityLimiter-like object"),
-    ("py:obj", "bytes-like"),
+    ("py:class", "CapacityLimiter-like object"),
+    ("py:class", "bytes-like"),
+    ("py:class", "None"),
+    # Was removed but still shows up in changelog
+    ("py:class", "trio.hazmat.RunLocal"),
     # trio.abc is documented at random places scattered throughout the docs
     ("py:mod", "trio.abc"),
+    # contextvars is added in 3.7, but the docs point to 3.6
+    # these two entries can be removed after 3.7 is released
+    ("py:mod", "contextvars"),
+    ("py:class", "contextvars.Context"),
 ]
+autodoc_inherit_docstrings = False
 
 # XX hack the RTD theme until
 #   https://github.com/rtfd/sphinx_rtd_theme/pull/382

@@ -1,43 +1,36 @@
+import functools
 import inspect
-import enum
-from collections import deque
-import threading
-from time import monotonic
+import logging
 import os
 import random
-from contextlib import contextmanager, closing
 import select
-import sys
+import threading
+from collections import deque
+from contextlib import contextmanager, closing
+from contextvars import copy_context
 from math import inf
-import functools
-import logging
+from time import monotonic
 
 import attr
+from async_generator import async_generator, yield_, asynccontextmanager
 from sortedcontainers import SortedDict
-from async_generator import async_generator, yield_
 
-from .._util import acontextmanager
-from .._deprecate import deprecated
-
-from .. import _core
-from ._exceptions import (
-    TrioInternalError, RunFinishedError, Cancelled, WouldBlock
+from . import _public
+from ._entry_queue import EntryQueue, TrioToken
+from ._exceptions import (TrioInternalError, RunFinishedError, Cancelled)
+from ._ki import (
+    LOCALS_KEY_KI_PROTECTION_ENABLED, currently_ki_protected, ki_manager,
+    enable_ki_protection
 )
 from ._multierror import MultiError
 from ._result import Result, Error, Value
 from ._traps import (
-    cancel_shielded_checkpoint,
     Abort,
     wait_task_rescheduled,
     CancelShieldedCheckpoint,
     WaitTaskRescheduled,
 )
-from ._entry_queue import EntryQueue, TrioToken
-from ._ki import (
-    LOCALS_KEY_KI_PROTECTION_ENABLED, currently_ki_protected, ki_manager,
-    enable_ki_protection
-)
-from . import _public
+from .. import _core
 
 # At the bottom of this file there's also some "clever" code that generates
 # wrapper functions for runner and io manager methods, and adds them to
@@ -296,7 +289,7 @@ class _TaskStatus:
         self._old_nursery._check_nursery_closed()
 
 
-@acontextmanager
+@asynccontextmanager
 @async_generator
 @enable_ki_protection
 async def open_nursery():
@@ -482,6 +475,9 @@ class Task:
     coro = attr.ib()
     _runner = attr.ib()
     name = attr.ib()
+    # PEP 567 contextvars context
+    context = attr.ib()
+
     # Invariant:
     # - for unscheduled tasks, _next_send is None
     # - for scheduled tasks, _next_send is a Result object
@@ -678,6 +674,15 @@ class Runner:
         """
         return self.clock
 
+    @_public
+    def current_root_task(self):
+        """Returns the current root :class:`Task`.
+        
+        This is the task that is the ultimate parent of all other tasks.
+
+        """
+        return self.init_task
+
     ################
     # Core task handling primitives
     ################
@@ -820,7 +825,13 @@ class Runner:
                 name = "{}.{}".format(name.__module__, name.__qualname__)
             except AttributeError:
                 name = repr(name)
-        task = Task(coro=coro, parent_nursery=nursery, runner=self, name=name)
+        task = Task(
+            coro=coro,
+            parent_nursery=nursery,
+            runner=self,
+            name=name,
+            context=copy_context(),
+        )
         self.tasks.add(task)
         if nursery is not None:
             nursery._children.add(task)
@@ -1001,7 +1012,7 @@ class Runner:
         time.
 
         If there are multiple tasks blocked in :func:`wait_all_tasks_blocked`,
-        then the one with the shortest ``cushion`` is the one woken (and the
+        then the one with the shortest ``cushion`` is the one woken (and
         this task becoming unblocked resets the timers for the remaining
         tasks). If there are multiple tasks that have exactly the same
         ``cushion``, then the one with the lowest ``tiebreaker`` value is
@@ -1340,7 +1351,7 @@ def run_impl(runner, async_fn, args):
                 #   https://bugs.python.org/issue29590
                 # So now we send in the Result object and unwrap it on the
                 # other side.
-                msg = task.coro.send(next_send)
+                msg = task.context.run(task.coro.send, next_send)
             except StopIteration as stop_iteration:
                 final_result = Value(stop_iteration.value)
             except BaseException as task_exc:

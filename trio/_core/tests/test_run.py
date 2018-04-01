@@ -1,25 +1,24 @@
-import threading
-import sys
-import time
-from math import inf
-import platform
+import contextvars
 import functools
+import platform
+import sys
+import threading
+import time
 import warnings
 from contextlib import contextmanager
-import gc
+from math import inf
 
-import pytest
 import attr
+import pytest
 
 from .tutil import check_sequence_matches, gc_collect_harder
+from ... import _core
+from ..._timeouts import sleep
 from ...testing import (
     wait_all_tasks_blocked,
     Sequencer,
     assert_checkpoints,
 )
-from ..._timeouts import sleep
-
-from ... import _core
 
 
 # slightly different from _timeouts.sleep_forever because it returns the value
@@ -275,6 +274,11 @@ async def test_current_task():
 
     async with _core.open_nursery() as nursery:
         nursery.start_soon(child)
+
+
+async def test_root_task():
+    root = _core.current_root_task()
+    assert root.parent_nursery is None
 
 
 def test_out_of_context():
@@ -1805,3 +1809,42 @@ async def test_nursery_start_keeps_nursery_open(autojump_clock):
             nursery1.start_soon(start_sleep_then_crash, nursery2)
             await wait_all_tasks_blocked()
         assert _core.current_time() - t0 == 7
+
+
+def test_contextvar_support():
+    var = contextvars.ContextVar("test")
+    var.set("before")
+
+    assert var.get() == "before"
+
+    async def inner():
+        task = _core.current_task()
+        assert task.context.get(var) == "before"
+        assert var.get() == "before"
+        var.set("after")
+        assert var.get() == "after"
+        assert var in task.context
+        assert task.context.get(var) == "after"
+
+    _core.run(inner)
+    assert var.get() == "before"
+
+
+async def test_contextvar_multitask():
+    var = contextvars.ContextVar("test", default="hmmm")
+
+    async def t1():
+        assert var.get() == "hmmm"
+        var.set("hmmmm")
+        assert var.get() == "hmmmm"
+
+    async def t2():
+        assert var.get() == "hmmmm"
+
+    async with _core.open_nursery() as n:
+        n.start_soon(t1)
+        await wait_all_tasks_blocked()
+        assert var.get() == "hmmm"
+        var.set("hmmmm")
+        n.start_soon(t2)
+        await wait_all_tasks_blocked()

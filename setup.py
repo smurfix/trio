@@ -43,7 +43,7 @@ chance to give feedback about any compatibility-breaking changes.
 Vital statistics:
 
 * Supported environments: Linux, MacOS, or Windows running some kind of Python
-  3.5-or-better (either CPython or PyPy3 is fine). \\*BSD and illumus likely
+  3.5-or-better (either CPython or PyPy3 is fine). \\*BSD and illumos likely
   work too, but are not tested.
 
 * Install: ``python3 -m pip install -U trio`` (or on Windows, maybe
@@ -76,7 +76,7 @@ setup(
     install_requires=[
         "attrs",
         "sortedcontainers",
-        "async_generator >= 1.6",
+        "async_generator >= 1.9",
         "idna",
         # PEP 508 style, but:
         # https://bitbucket.org/pypa/wheel/issues/181/bdist_wheel-silently-discards-pep-508
@@ -90,7 +90,8 @@ setup(
     # also supported by pip and setuptools, as long as they're vaguely
     # recent
     extras_require={
-        ":os_name == 'nt'": ["cffi"],  # "cffi is required on windows"
+        ":os_name == 'nt'": ["cffi"],  # "cffi is required on windows",
+        ":python_version < '3.7'": ["contextvars>=2.1"]
     },
     python_requires=">=3.5",
     keywords=["async", "io", "networking", "trio"],
