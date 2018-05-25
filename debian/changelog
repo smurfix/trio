@@ -1,3 +1,9 @@
+trio (0.4.0-3) unstable; urgency=medium
+
+  * Depend on python3-contextvars
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Fri, 25 May 2018 04:17:49 +0200
+
 trio (0.4.0-2) unstable; urgency=medium
 
   * Depend on async-generator
