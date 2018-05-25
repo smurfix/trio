@@ -1,3 +1,9 @@
+trio (0.4.0-2) unstable; urgency=medium
+
+  * Depend on async-generator
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Fri, 25 May 2018 04:07:02 +0200
+
 trio (0.4.0-1) unstable; urgency=medium
 
   * New Upstream release.
