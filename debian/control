@@ -13,7 +13,7 @@ Architecture: all
 Depends: ${misc:Depends}, ${python3:Depends},
   python3-async-generator,
   python3-contextvars,
-Description: An async/await-native I/O library for humans and snake people
+Description: Async/await-native I/O library for humans and snake people
  The Trio project's goal is to produce a production-quality, permissively
  licensed async/await-native I/O library for Python. Like all async
  libraries, its main purpose is to help you write programs that do multiple
