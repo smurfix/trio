@@ -70,6 +70,7 @@ extensions = [
 
 intersphinx_mapping = {
     "python": ('https://docs.python.org/3', None),
+    "outcome": ('https://outcome.readthedocs.org/en/latest/', None),
 }
 
 autodoc_member_order = "bysource"
@@ -125,7 +126,7 @@ language = None
 exclude_patterns = []
 
 # The name of the Pygments (syntax highlighting) style to use.
-pygments_style = 'sphinx'
+pygments_style = 'default'
 
 highlight_language = 'python3'
 

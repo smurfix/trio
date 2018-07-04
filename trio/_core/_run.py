@@ -7,13 +7,18 @@ import select
 import threading
 from collections import deque
 from contextlib import contextmanager, closing
+
+import outcome
 from contextvars import copy_context
 from math import inf
 from time import monotonic
 
 import attr
-from async_generator import async_generator, yield_, asynccontextmanager
+from async_generator import (
+    async_generator, yield_, asynccontextmanager, isasyncgen
+)
 from sortedcontainers import SortedDict
+from outcome import Error, Value
 
 from . import _public
 from ._entry_queue import EntryQueue, TrioToken
@@ -23,7 +28,6 @@ from ._ki import (
     enable_ki_protection
 )
 from ._multierror import MultiError
-from ._result import Result, Error, Value
 from ._traps import (
     Abort,
     wait_task_rescheduled,
@@ -402,7 +406,7 @@ class Nursery:
             # KeyboardInterrupt), then save that, but still wait until our
             # children finish.
             def aborted(raise_cancel):
-                self._add_exc(Result.capture(raise_cancel).error)
+                self._add_exc(outcome.capture(raise_cancel).error)
                 return Abort.FAILED
 
             self._parent_waiting_in_aexit = True
@@ -504,7 +508,7 @@ class Task:
     @property
     def parent_nursery(self):
         """The nursery this task is inside (or None if this is the "init"
-        take).
+        task).
 
         Example use case: drawing a visualization of the task tree in a
         debugger.
@@ -542,7 +546,7 @@ class Task:
         # whether we succeeded or failed.
         self._abort_func = None
         if success is Abort.SUCCEEDED:
-            self._runner.reschedule(self, Result.capture(raise_cancel))
+            self._runner.reschedule(self, outcome.capture(raise_cancel))
 
     def _attempt_delivery_of_any_pending_cancel(self):
         if self._abort_func is None:
@@ -604,11 +608,14 @@ class Runner:
     init_task = attr.ib(default=None)
     init_task_result = attr.ib(default=None)
     system_nursery = attr.ib(default=None)
+    system_context = attr.ib(default=None)
     main_task = attr.ib(default=None)
     main_task_result = attr.ib(default=None)
 
     entry_queue = attr.ib(default=attr.Factory(EntryQueue))
     trio_token = attr.ib(default=None)
+
+    _NO_SEND = object()
 
     def close(self):
         self.io_manager.close()
@@ -688,9 +695,9 @@ class Runner:
     ################
 
     @_public
-    def reschedule(self, task, next_send=Value(None)):
+    def reschedule(self, task, next_send=_NO_SEND):
         """Reschedule the given task with the given
-        :class:`~trio.hazmat.Result`.
+        :class:`outcome.Outcome`.
 
         See :func:`wait_task_rescheduled` for the gory details.
 
@@ -702,10 +709,13 @@ class Runner:
         Args:
           task (trio.hazmat.Task): the task to be rescheduled. Must be blocked
             in a call to :func:`wait_task_rescheduled`.
-          next_send (trio.hazmat.Result): the value (or error) to return (or
+          next_send (outcome.Outcome): the value (or error) to return (or
             raise) from :func:`wait_task_rescheduled`.
 
         """
+        if next_send is self._NO_SEND:
+            next_send = Value(None)
+
         assert task._runner is self
         assert task._next_send is None
         task._next_send = next_send
@@ -713,9 +723,7 @@ class Runner:
         self.runq.append(task)
         self.instrument("task_scheduled", task)
 
-    def spawn_impl(
-        self, async_fn, args, nursery, name, *, ki_protection_enabled=False
-    ):
+    def spawn_impl(self, async_fn, args, nursery, name, *, system_task=False):
 
         ######
         # Make sure the nursery is in working order
@@ -805,6 +813,13 @@ class Runner:
                     "That won't work without some sort of compatibility shim."
                     .format(coro)
                 )
+
+            if isasyncgen(coro):
+                raise TypeError(
+                    "start_soon expected an async function but got an async "
+                    "generator {!r}".format(coro)
+                )
+
             # Give good error for: nursery.start_soon(some_sync_fn)
             raise TypeError(
                 "trio expected an async function, but {!r} appears to be "
@@ -825,28 +840,36 @@ class Runner:
                 name = "{}.{}".format(name.__module__, name.__qualname__)
             except AttributeError:
                 name = repr(name)
+
+        if system_task:
+            context = self.system_context.copy()
+        else:
+            context = copy_context()
+
         task = Task(
             coro=coro,
             parent_nursery=nursery,
             runner=self,
             name=name,
-            context=copy_context(),
+            context=context,
         )
         self.tasks.add(task)
+        coro.cr_frame.f_locals.setdefault(
+            LOCALS_KEY_KI_PROTECTION_ENABLED, system_task
+        )
+
         if nursery is not None:
             nursery._children.add(task)
             for scope in nursery._cancel_stack:
                 scope._add_task(task)
-        coro.cr_frame.f_locals.setdefault(
-            LOCALS_KEY_KI_PROTECTION_ENABLED, ki_protection_enabled
-        )
-        if nursery is not None:
+
             # Task locals are inherited from the spawning task, not the
             # nursery task. The 'if nursery' check is just used as a guard to
             # make sure we don't try to do this to the root task.
             parent_task = current_task()
             for local, values in parent_task._locals.items():
                 task._locals[local] = dict(values)
+
         self.instrument("task_spawned", task)
         # Special case: normally next_send should be a Result, but for the
         # very first send we have to send a literal unboxed None.
@@ -893,6 +916,8 @@ class Runner:
           *enabled*. If you want your task to be interruptible by control-C,
           then you need to use :func:`disable_ki_protection` explicitly.
 
+        * System tasks do not inherit context variables from their creator.
+
         Args:
           async_fn: An async callable.
           args: Positional arguments for ``async_fn``. If you want to pass
@@ -928,10 +953,11 @@ class Runner:
         if name is None:
             name = async_fn
         return self.spawn_impl(
-            system_task_wrapper, (async_fn, args),
+            system_task_wrapper,
+            (async_fn, args),
             self.system_nursery,
             name,
-            ki_protection_enabled=True
+            system_task=True,
         )
 
     async def init(self, async_fn, args):
@@ -1130,7 +1156,7 @@ def run(
     async_fn,
     *args,
     clock=None,
-    instruments=[],
+    instruments=(),
     restrict_keyboard_interrupt_to_checkpoints=False
 ):
     """Run a trio-flavored async function, and return the result.
@@ -1217,7 +1243,10 @@ def run(
     instruments = list(instruments)
     io_manager = TheIOManager()
     runner = Runner(
-        clock=clock, instruments=instruments, io_manager=io_manager
+        clock=clock,
+        instruments=instruments,
+        io_manager=io_manager,
+        system_context=copy_context(),
     )
     GLOBAL_RUN_CONTEXT.runner = runner
     locals()[LOCALS_KEY_KI_PROTECTION_ENABLED] = True
@@ -1262,10 +1291,11 @@ def run_impl(runner, async_fn, args):
     runner.instrument("before_run")
     runner.clock.start_clock()
     runner.init_task = runner.spawn_impl(
-        runner.init, (async_fn, args),
+        runner.init,
+        (async_fn, args),
         None,
         "<init>",
-        ki_protection_enabled=True
+        system_task=True,
     )
 
     # You know how people talk about "event loops"? This 'while' loop right

@@ -25,7 +25,7 @@ async def aclose_forcefully(resource):
     cancelling it immediately.
 
     Most users won't need this, but it may be useful on cleanup paths where
-    you can't afford to block, or if you want to close an resource and don't
+    you can't afford to block, or if you want to close a resource and don't
     care about handling it gracefully. For example, if
     :class:`~trio.ssl.SSLStream` encounters an error and cannot perform its
     own graceful close, then there's no point in waiting to gracefully shut
@@ -43,7 +43,7 @@ async def aclose_forcefully(resource):
 
 
 class BrokenStreamError(Exception):
-    """Raised when an attempt to use a stream a stream fails due to external
+    """Raised when an attempt to use a stream fails due to external
     circumstances.
 
     For example, you might get this if you try to send data on a stream where

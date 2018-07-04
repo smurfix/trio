@@ -9,7 +9,9 @@ from contextlib import contextmanager
 from math import inf
 
 import attr
+import outcome
 import pytest
+from async_generator import async_generator
 
 from .tutil import check_sequence_matches, gc_collect_harder
 from ... import _core
@@ -225,14 +227,14 @@ async def test_reschedule():
         print("child1 woke")
         assert x == 0
         print("child1 rescheduling t2")
-        _core.reschedule(t2, _core.Error(ValueError()))
+        _core.reschedule(t2, outcome.Error(ValueError()))
         print("child1 exit")
 
     async def child2():
         nonlocal t1, t2
         print("child2 start")
         t2 = _core.current_task()
-        _core.reschedule(t1, _core.Value(0))
+        _core.reschedule(t1, outcome.Value(0))
         print("child2 sleep")
         with pytest.raises(ValueError):
             await sleep_forever()
@@ -872,7 +874,7 @@ async def test_failed_abort():
         # cancel didn't wake it up
         assert record == ["sleep"]
         # wake it up again by hand
-        _core.reschedule(stubborn_task[0], _core.Value(1))
+        _core.reschedule(stubborn_task[0], outcome.Value(1))
     assert record == ["sleep", "woke", "cancelled"]
 
 
@@ -1105,7 +1107,7 @@ async def test_exc_info_after_yield_error():
         async with _core.open_nursery() as nursery:
             nursery.start_soon(child)
             await wait_all_tasks_blocked()
-            _core.reschedule(child_task, _core.Error(ValueError()))
+            _core.reschedule(child_task, outcome.Error(ValueError()))
 
 
 # Similar to previous test -- if the ValueError() gets sent in via 'throw',
@@ -1126,7 +1128,7 @@ async def test_exception_chaining_after_yield_error():
         async with _core.open_nursery() as nursery:
             nursery.start_soon(child)
             await wait_all_tasks_blocked()
-            _core.reschedule(child_task, _core.Error(ValueError()))
+            _core.reschedule(child_task, outcome.Error(ValueError()))
 
     assert isinstance(excinfo.value.__context__, KeyError)
 
@@ -1375,7 +1377,7 @@ async def test_slow_abort_basic():
             token = _core.current_trio_token()
 
             def slow_abort(raise_cancel):
-                result = _core.Result.capture(raise_cancel)
+                result = outcome.capture(raise_cancel)
                 token.run_sync_soon(_core.reschedule, task, result)
                 return _core.Abort.FAILED
 
@@ -1391,7 +1393,7 @@ async def test_slow_abort_edge_cases():
 
         def slow_abort(raise_cancel):
             record.append("abort-called")
-            result = _core.Result.capture(raise_cancel)
+            result = outcome.capture(raise_cancel)
             token.run_sync_soon(_core.reschedule, task, result)
             return _core.Abort.FAILED
 
@@ -1588,6 +1590,15 @@ def test_nice_error_on_bad_calls_to_run_or_spawn():
             with pytest.raises(TypeError) as excinfo:
                 bad_call(len, [1, 2, 3])
             assert "appears to be synchronous" in str(excinfo.value)
+
+            @async_generator
+            async def async_gen(arg):  # pragma: no cover
+                pass
+
+            with pytest.raises(TypeError) as excinfo:
+                bad_call(async_gen, 0)
+            msg = "expected an async function but got an async generator"
+            assert msg in str(excinfo.value)
 
             # Make sure no references are kept around to keep anything alive
             del excinfo
@@ -1848,6 +1859,26 @@ async def test_contextvar_multitask():
         var.set("hmmmm")
         n.start_soon(t2)
         await wait_all_tasks_blocked()
+
+
+def test_system_task_contexts():
+    cvar = contextvars.ContextVar('qwilfish')
+    cvar.set("water")
+
+    async def system_task():
+        assert cvar.get() == "water"
+
+    async def regular_task():
+        assert cvar.get() == "poison"
+
+    async def inner():
+        async with _core.open_nursery() as nursery:
+            cvar.set("poison")
+            nursery.start_soon(regular_task)
+            _core.spawn_system_task(system_task)
+            await wait_all_tasks_blocked()
+
+    _core.run(inner)
 
 
 def test_Cancelled_init():

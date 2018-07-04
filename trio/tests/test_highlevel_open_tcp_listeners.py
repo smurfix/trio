@@ -81,7 +81,9 @@ async def measure_backlog(listener, limit):
             if len(client_streams) >= limit:  # pragma: no cover
                 return "lots"
     finally:
-        for client_stream in client_streams:
+        # The need for "no cover" here is subtle: see
+        # https://github.com/python-trio/trio/issues/522
+        for client_stream in client_streams:  # pragma: no cover
             await client_stream.aclose()
 
     return len(client_streams)
@@ -101,7 +103,7 @@ async def test_open_tcp_listeners_backlog():
         assert required_min <= actual <= required_max
 
     await check_backlog(nominal=1, required_min=1, required_max=10)
-    await check_backlog(nominal=10, required_min=10, required_max=20)
+    await check_backlog(nominal=11, required_min=11, required_max=20)
 
 
 @need_ipv6

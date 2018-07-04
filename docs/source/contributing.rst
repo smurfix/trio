@@ -92,7 +92,7 @@ sucks" or "I can't believe anyone uses X".
 
 Please try not to make assumptions about people's gender, and in
 particular remember that we're not all dudes. If you don't have a
-any specific reason to assume otherwise, then `singular they
+specific reason to assume otherwise, then `singular they
 <https://en.wikipedia.org/wiki/Third-person_pronoun#Singular_they>`__
 makes a fine pronoun, and there are plenty of gender-neutral
 collective terms: "Hey folks", "Hi all", ...
@@ -451,7 +451,7 @@ time you review a PR, you want someone else to check over your work
 before you hit the merge button.
 
 For general tips on doing code reviews, the `node.js guide
-<https://github.com/nodejs/node/blob/master/CONTRIBUTING.md#reviewing-pull-requests>`__
+<https://github.com/nodejs/node/blob/master/doc/guides/contributing/pull-requests.md#reviewing-pull-requests>`__
 has some good suggestions, and `so does this blog post
 <http://verraes.net/2013/10/pre-merge-code-reviews/>`__.
 

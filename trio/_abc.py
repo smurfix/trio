@@ -48,7 +48,7 @@ class Clock(metaclass=ABCMeta):
         """Compute the real time until the given deadline.
 
         This is called before we enter a system-specific wait function like
-        :func:~select.select`, to get the timeout to pass.
+        :func:`select.select`, to get the timeout to pass.
 
         For a clock using wall-time, this should be something like::
 
@@ -486,10 +486,10 @@ class Listener(AsyncResource):
         """Wait until an incoming connection arrives, and then return it.
 
         Returns:
-          AsyncResource: an object representing the incoming connection. In
-              practice this is almost always some variety of :class:`Stream`,
-              though in principle you could also use this interface with, say,
-              SOCK_SEQPACKET sockets or similar.
+          AsyncResource: An object representing the incoming connection. In
+          practice this is almost always some variety of :class:`Stream`,
+          though in principle you could also use this interface with, say,
+          SOCK_SEQPACKET sockets or similar.
 
         Raises:
           trio.ResourceBusyError: if two tasks attempt to call

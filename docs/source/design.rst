@@ -458,11 +458,9 @@ of our public APIs without having to modify trio internals.
 Inside ``trio._core``
 ~~~~~~~~~~~~~~~~~~~~~
 
-There are three notable sub-modules that are largely independent of
+There are two notable sub-modules that are largely independent of
 the rest of trio, and could (possibly should?) be extracted into their
 own independent packages:
-
-* ``_result.py``: Defines :class:`~trio.hazmat.Result`.
 
 * ``_multierror.py``: Implements :class:`MultiError` and associated
   infrastructure.
@@ -472,7 +470,7 @@ own independent packages:
 
 The most important submodule, where everything is integrated, is
 ``_run.py``. (This is also by far the largest submodule; it'd be nice
-to factor bits of it out with possible, but it's tricky because the
+to factor bits of it out where possible, but it's tricky because the
 core functionality genuinely is pretty intertwined.) Notably, this is
 where cancel scopes, nurseries, and :class:`~trio.hazmat.Task` are
 defined; it's also where the scheduler state and :func:`trio.run`

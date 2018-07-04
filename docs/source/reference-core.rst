@@ -155,7 +155,7 @@ kind of issue looks like in real life, consider this function::
         data = bytearray()
         while nbytes > 0:
             # recv() reads up to 'nbytes' bytes each time
-            chunk += await sock.recv(nbytes)
+            chunk = await sock.recv(nbytes)
             if not chunk:
                 raise RuntimeError("socket unexpected closed")
             nbytes -= len(chunk)
@@ -1210,7 +1210,7 @@ best choice, but for now that's how it works.
 
 As an example of what this means, here's a small program in which two
 tasks compete for a lock. Notice that the task which releases the lock
-always immedately attempts to re-acquire it, before the other task has
+always immediately attempts to re-acquire it, before the other task has
 a chance to run. (And remember that we're doing cooperative
 multi-tasking here, so it's actually *deterministic* that the task
 releasing the lock will call :meth:`~Lock.acquire` before the other
@@ -1288,6 +1288,12 @@ By placing an upper bound on our queue's size, we avoid this problem.
 If the queue gets too big, then it applies *backpressure*: ``put``
 blocks and forces the producers to slow down and wait until the
 consumer calls ``get``.
+
+You can also create a :class:`Queue` with size 0. In that case any
+task that calls ``put`` on the queue will wait until another task
+calls ``get`` on the same queue, and vice versa. This is similar to
+the behavior of `channels as described in the CSP model
+<https://en.wikipedia.org/wiki/Channel_(programming)>`__.
 
 .. autoclass:: Queue
    :members:
