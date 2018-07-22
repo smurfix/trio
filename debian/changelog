@@ -1,3 +1,9 @@
+trio (0.5.0-1) unstable; urgency=medium
+
+  * Release v0.5.0
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Sun, 22 Jul 2018 21:09:03 +0200
+
 trio (0.5.0~dev3-2) unstable; urgency=medium
 
   * Merge
