@@ -139,7 +139,7 @@ class PyOpenSSLEchoStream:
         # renegotiations. Of course TLS 1.3 support isn't released yet, but
         # I'm told that this will work once it is. (And once it is we can
         # remove the pragma: no cover too.) Alternatively, once we drop
-        # support for CPython 3.5 on MacOS, then we could switch to using
+        # support for CPython 3.5 on macOS, then we could switch to using
         # TLSv1_2_METHOD.
         #
         # Discussion: https://github.com/pyca/pyopenssl/issues/624
@@ -972,9 +972,7 @@ async def test_ssl_bad_shutdown():
 async def test_ssl_bad_shutdown_but_its_ok():
     client, server = ssl_memory_stream_pair(
         server_kwargs={"https_compatible": True},
-        client_kwargs={
-            "https_compatible": True
-        }
+        client_kwargs={"https_compatible": True}
     )
 
     async with _core.open_nursery() as nursery:
@@ -1039,9 +1037,7 @@ async def test_ssl_only_closes_stream_once():
 async def test_ssl_https_compatibility_disagreement():
     client, server = ssl_memory_stream_pair(
         server_kwargs={"https_compatible": False},
-        client_kwargs={
-            "https_compatible": True
-        }
+        client_kwargs={"https_compatible": True}
     )
 
     async with _core.open_nursery() as nursery:
@@ -1063,9 +1059,7 @@ async def test_ssl_https_compatibility_disagreement():
 async def test_https_mode_eof_before_handshake():
     client, server = ssl_memory_stream_pair(
         server_kwargs={"https_compatible": True},
-        client_kwargs={
-            "https_compatible": True
-        }
+        client_kwargs={"https_compatible": True}
     )
 
     async def server_expect_clean_eof():

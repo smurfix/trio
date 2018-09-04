@@ -17,6 +17,7 @@ from async_generator import async_generator
 from .tutil import check_sequence_matches, gc_collect_harder
 from ... import _core
 from ..._timeouts import sleep
+from ..._util import aiter_compat
 from ...testing import (
     wait_all_tasks_blocked,
     Sequencer,
@@ -959,15 +960,14 @@ def test_system_task_crash_MultiError():
         _core.spawn_system_task(system_task)
         await sleep_forever()
 
-    with pytest.raises(_core.MultiError) as excinfo:
+    with pytest.raises(_core.TrioInternalError) as excinfo:
         _core.run(main)
 
-    assert len(excinfo.value.exceptions) == 2
-    cause_types = set()
-    for exc in excinfo.value.exceptions:
-        assert type(exc) is _core.TrioInternalError
-        cause_types.add(type(exc.__cause__))
-    assert cause_types == {KeyError, ValueError}
+    me = excinfo.value.__cause__
+    assert isinstance(me, _core.MultiError)
+    assert len(me.exceptions) == 2
+    for exc in me.exceptions:
+        assert isinstance(exc, (KeyError, ValueError))
 
 
 def test_system_task_crash_plus_Cancelled():
@@ -1004,9 +1004,9 @@ def test_system_task_crash_KeyboardInterrupt():
         _core.spawn_system_task(ki)
         await sleep_forever()
 
-    # KI doesn't get wrapped with TrioInternalError
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(_core.TrioInternalError) as excinfo:
         _core.run(main)
+    assert isinstance(excinfo.value.__cause__, KeyboardInterrupt)
 
 
 # This used to fail because checkpoint was a yield followed by an immediate
@@ -1142,6 +1142,7 @@ async def test_nursery_exception_chaining_doesnt_make_context_loops():
         async with _core.open_nursery() as nursery:
             nursery.start_soon(crasher)
             raise ValueError
+    # the MultiError should not have the KeyError or ValueError as context
     assert excinfo.value.__context__ is None
 
 
@@ -1352,7 +1353,7 @@ async def test_TrioToken_run_sync_soon_massive_queue():
     # There are edge cases in the wakeup fd code when the wakeup fd overflows,
     # so let's try to make that happen. This is also just a good stress test
     # in general. (With the current-as-of-2017-02-14 code using a socketpair
-    # with minimal buffer, Linux takes 6 wakeups to fill the buffer and MacOS
+    # with minimal buffer, Linux takes 6 wakeups to fill the buffer and macOS
     # takes 1 wakeup. So 1000 is overkill if anything. Windows OTOH takes
     # ~600,000 wakeups, but has the same code paths...)
     COUNT = 1000
@@ -1823,6 +1824,103 @@ async def test_nursery_start_keeps_nursery_open(autojump_clock):
         assert _core.current_time() - t0 == 7
 
 
+async def test_nursery_explicit_exception():
+    with pytest.raises(KeyError):
+        async with _core.open_nursery():
+            raise KeyError()
+
+
+async def test_nursery_stop_iteration():
+    async def fail():
+        raise ValueError
+
+    try:
+        async with _core.open_nursery() as nursery:
+            nursery.start_soon(fail)
+            raise StopIteration
+    except _core.MultiError as e:
+        assert tuple(map(type, e.exceptions)) == (StopIteration, ValueError)
+
+
+async def test_nursery_stop_async_iteration():
+    class it(object):
+        def __init__(self, count):
+            self.count = count
+            self.val = 0
+
+        async def __anext__(self):
+            await sleep(0)
+            val = self.val
+            if val >= self.count:
+                raise StopAsyncIteration
+            self.val += 1
+            return val
+
+    class async_zip(object):
+        def __init__(self, *largs):
+            self.nexts = [obj.__anext__ for obj in largs]
+
+        async def _accumulate(self, f, items, i):
+            items[i] = await f()
+
+        @aiter_compat
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            nexts = self.nexts
+            items = [
+                None,
+            ] * len(nexts)
+            got_stop = False
+
+            def handle(exc):
+                nonlocal got_stop
+                if isinstance(exc, StopAsyncIteration):
+                    got_stop = True
+                    return None
+                else:  # pragma: no cover
+                    return exc
+
+            with _core.MultiError.catch(handle):
+                async with _core.open_nursery() as nursery:
+                    for i, f in enumerate(nexts):
+                        nursery.start_soon(self._accumulate, f, items, i)
+
+            if got_stop:
+                raise StopAsyncIteration
+            return items
+
+    result = []
+    async for vals in async_zip(it(4), it(2)):
+        result.append(vals)
+    assert result == [[0, 0], [1, 1]]
+
+
+async def test_traceback_frame_removal():
+    async def my_child_task():
+        raise KeyError()
+
+    try:
+        # Trick: For now cancel/nursery scopes still leave a bunch of tb gunk
+        # behind. But if there's a MultiError, they leave it on the MultiError,
+        # which lets us get a clean look at the KeyError itself. Someday I
+        # guess this will always be a MultiError (#611), but for now we can
+        # force it by raising two exceptions.
+        async with _core.open_nursery() as nursery:
+            nursery.start_soon(my_child_task)
+            nursery.start_soon(my_child_task)
+    except _core.MultiError as exc:
+        first_exc = exc.exceptions[0]
+        assert isinstance(first_exc, KeyError)
+        # The top frame in the exception traceback should be inside the child
+        # task, not trio/contextvars internals. And there's only one frame
+        # inside the child task, so this will also detect if our frame-removal
+        # is too eager.
+        frame = first_exc.__traceback__.tb_frame
+        assert frame.f_code is my_child_task.__code__
+
+
 def test_contextvar_support():
     var = contextvars.ContextVar("test")
     var.set("before")
@@ -1908,3 +2006,12 @@ def test_sniffio_integration():
 
     with pytest.raises(sniffio.AsyncLibraryNotFoundError):
         sniffio.current_async_library()
+
+
+async def test_Task_custom_sleep_data():
+    task = _core.current_task()
+    assert task.custom_sleep_data is None
+    task.custom_sleep_data = 1
+    assert task.custom_sleep_data == 1
+    await _core.checkpoint()
+    assert task.custom_sleep_data is None
