@@ -14,7 +14,8 @@ Features
 - The length of typical exception traces coming from Trio has been greatly
   reduced. This was done by eliminating many of the exception frames related to
   details of the implementation. (`#56
-  <https://github.com/python-trio/trio/issues/56>`__)
+  <https://github.com/python-trio/trio/issues/56>`__, `Blog entry
+  <https://vorpus.org/blog/beautiful-tracebacks-in-trio-v070/>`__)
 - New and improved signal catching API: :func:`open_signal_receiver`. (`#354
   <https://github.com/python-trio/trio/issues/354>`__)
 - The low level :func:`trio.hazmat.wait_socket_readable`,
