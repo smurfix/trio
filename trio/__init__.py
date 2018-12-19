@@ -15,52 +15,52 @@
 
 from ._version import __version__
 
-__all__ = []
+from ._core import (
+    TrioInternalError, RunFinishedError, WouldBlock, Cancelled,
+    BusyResourceError, ClosedResourceError, MultiError, run, open_nursery,
+    open_cancel_scope, current_effective_deadline, TASK_STATUS_IGNORED,
+    current_time, BrokenResourceError, EndOfChannel, NoHandshakeError
+)
 
-from ._toplevel_core_reexports import *
-__all__ += _toplevel_core_reexports.__all__
+from ._timeouts import (
+    move_on_at, move_on_after, sleep_forever, sleep_until, sleep, fail_at,
+    fail_after, TooSlowError
+)
 
-from ._timeouts import *
-__all__ += _timeouts.__all__
+from ._sync import (
+    Event, CapacityLimiter, Semaphore, Lock, StrictFIFOLock, Condition, Queue
+)
 
-from ._sync import *
-__all__ += _sync.__all__
+from ._threads import (
+    run_sync_in_worker_thread, current_default_worker_thread_limiter,
+    BlockingTrioPortal
+)
 
-from ._threads import *
-__all__ += _threads.__all__
+from ._highlevel_generic import aclose_forcefully, StapledStream
 
-from ._highlevel_generic import *
-__all__ += _highlevel_generic.__all__
+from ._channel import open_memory_channel
 
-from ._signals import *
-__all__ += _signals.__all__
+from ._signals import catch_signals, open_signal_receiver
 
-from ._highlevel_socket import *
-__all__ += _highlevel_socket.__all__
+from ._highlevel_socket import SocketStream, SocketListener
 
-from ._file_io import *
-__all__ += _file_io.__all__
+from ._file_io import open_file, wrap_file
 
-from ._path import *
-__all__ += _path.__all__
+from ._path import Path
 
-from ._highlevel_serve_listeners import *
-__all__ += _highlevel_serve_listeners.__all__
+from ._highlevel_serve_listeners import serve_listeners
 
-from ._highlevel_open_tcp_stream import *
-__all__ += _highlevel_open_tcp_stream.__all__
+from ._highlevel_open_tcp_stream import open_tcp_stream
 
-from ._highlevel_open_tcp_listeners import *
-__all__ += _highlevel_open_tcp_listeners.__all__
+from ._highlevel_open_tcp_listeners import open_tcp_listeners, serve_tcp
 
-from ._highlevel_open_unix_stream import *
-__all__ += _highlevel_open_unix_stream.__all__
+from ._highlevel_open_unix_stream import open_unix_socket
 
-from ._highlevel_ssl_helpers import *
-__all__ += _highlevel_ssl_helpers.__all__
+from ._highlevel_ssl_helpers import (
+    open_ssl_over_tcp_stream, open_ssl_over_tcp_listeners, serve_ssl_over_tcp
+)
 
-from ._deprecate import *
-__all__ += _deprecate.__all__
+from ._deprecate import TrioDeprecationWarning
 
 # Imported by default
 from . import hazmat
@@ -68,47 +68,22 @@ from . import socket
 from . import abc
 from . import ssl
 # Not imported by default: testing
+if False:
+    from . import testing
 
 _deprecate.enable_attribute_deprecations(__name__)
 __deprecated_attributes__ = {
-    "ClosedStreamError":
+    "BrokenStreamError":
         _deprecate.DeprecatedAttribute(
-            ClosedResourceError,
-            "0.5.0",
-            issue=36,
-            instead=ClosedResourceError
+            BrokenResourceError,
+            "0.8.0",
+            issue=620,
+            instead=BrokenResourceError
         ),
-    "ClosedListenerError":
+    "ResourceBusyError":
         _deprecate.DeprecatedAttribute(
-            ClosedResourceError,
-            "0.5.0",
-            issue=36,
-            instead=ClosedResourceError
+            BusyResourceError, "0.8.0", issue=620, instead=BusyResourceError
         ),
-}
-
-_deprecate.enable_attribute_deprecations(hazmat.__name__)
-
-# Temporary hack to make sure _result is loaded, just during the deprecation
-# period
-from ._core import _result
-
-hazmat.__deprecated_attributes__ = {
-    "Result":
-        _deprecate.DeprecatedAttribute(
-            _core._result.Result,
-            "0.5.0",
-            issue=494,
-            instead="outcome.Outcome"
-        ),
-    "Value":
-        _deprecate.DeprecatedAttribute(
-            _core._result.Value, "0.5.0", issue=494, instead="outcome.Value"
-        ),
-    "Error":
-        _deprecate.DeprecatedAttribute(
-            _core._result.Error, "0.5.0", issue=494, instead="outcome.Error"
-        )
 }
 
 # Having the public path in .__module__ attributes is important for:

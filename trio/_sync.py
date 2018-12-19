@@ -1,11 +1,13 @@
 import operator
 from collections import deque, OrderedDict
+import math
 
 import attr
 import outcome
 
 from . import _core
 from ._util import aiter_compat
+from ._deprecate import deprecated
 
 __all__ = [
     "Event",
@@ -196,19 +198,21 @@ class CapacityLimiter:
         """
         return self._total_tokens
 
-    def _wake_waiters(self):
-        available = self._total_tokens - len(self._borrowers)
-        for woken in self._lot.unpark(count=available):
-            self._borrowers.add(self._pending_borrowers.pop(woken))
-
     @total_tokens.setter
     def total_tokens(self, new_total_tokens):
-        if not isinstance(new_total_tokens, int):
-            raise TypeError("total_tokens must be an int")
+        if not isinstance(
+            new_total_tokens, int
+        ) and new_total_tokens != math.inf:
+            raise TypeError("total_tokens must be an int or math.inf")
         if new_total_tokens < 1:
             raise ValueError("total_tokens must be >= 1")
         self._total_tokens = new_total_tokens
         self._wake_waiters()
+
+    def _wake_waiters(self):
+        available = self._total_tokens - len(self._borrowers)
+        for woken in self._lot.unpark(count=available):
+            self._borrowers.add(self._pending_borrowers.pop(woken))
 
     @property
     def borrowed_tokens(self):
@@ -415,8 +419,9 @@ class Semaphore:
         else:
             max_value_str = ", max_value={}".format(self._max_value)
         return (
-            "<trio.Semaphore({}{}) at {:#x}>"
-            .format(self._value, max_value_str, id(self))
+            "<trio.Semaphore({}{}) at {:#x}>".format(
+                self._value, max_value_str, id(self)
+            )
         )
 
     @property
@@ -524,8 +529,9 @@ class Lock:
             s1 = "unlocked"
             s2 = ""
         return (
-            "<{} {} object at {:#x}{}>"
-            .format(s1, self.__class__.__name__, id(self), s2)
+            "<{} {} object at {:#x}{}>".format(
+                s1, self.__class__.__name__, id(self), s2
+            )
         )
 
     def locked(self):
@@ -607,7 +613,7 @@ class Lock:
 
 
 class StrictFIFOLock(Lock):
-    """A variant of :class:`Lock` where tasks are guaranteed to acquire the
+    r"""A variant of :class:`Lock` where tasks are guaranteed to acquire the
     lock in strict first-come-first-served order.
 
     An example of when this is useful is if you're implementing something like
@@ -791,7 +797,7 @@ class Condition:
         self._lot.repark_all(self._lock._lot)
 
     def statistics(self):
-        """Return an object containing debugging information.
+        r"""Return an object containing debugging information.
 
         Currently the following fields are defined:
 
@@ -841,6 +847,12 @@ class Queue:
 
     """
 
+    @deprecated(
+        "0.9.0",
+        issue=497,
+        thing="trio.Queue",
+        instead="trio.open_memory_channel"
+    )
     def __init__(self, capacity):
         if not isinstance(capacity, int):
             raise TypeError("capacity must be an integer")
@@ -858,8 +870,9 @@ class Queue:
 
     def __repr__(self):
         return (
-            "<Queue({}) at {:#x} holding {} items>"
-            .format(self.capacity, id(self), len(self._data))
+            "<Queue({}) at {:#x} holding {} items>".format(
+                self.capacity, id(self), len(self._data)
+            )
         )
 
     def qsize(self):

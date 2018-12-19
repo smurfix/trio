@@ -1,13 +1,16 @@
 import inspect
 import signal
 import sys
-import threading
 from contextlib import contextmanager
 from functools import wraps
 
 import async_generator
 
 from .._util import is_main_thread
+
+if False:
+    from typing import Any, TypeVar, Callable
+    F = TypeVar('F', bound=Callable[..., Any])
 
 __all__ = [
     "enable_ki_protection",
@@ -94,7 +97,7 @@ def ki_protection_enabled(frame):
 
 
 def currently_ki_protected():
-    """Check whether the calling code has :exc:`KeyboardInterrupt` protection
+    r"""Check whether the calling code has :exc:`KeyboardInterrupt` protection
     enabled.
 
     It's surprisingly easy to think that one's :exc:`KeyboardInterrupt`
@@ -166,10 +169,12 @@ def _ki_protection_decorator(enabled):
     return decorator
 
 
-enable_ki_protection = _ki_protection_decorator(True)
+enable_ki_protection = _ki_protection_decorator(True)  # type: Callable[[F], F]
 enable_ki_protection.__name__ = "enable_ki_protection"
 
-disable_ki_protection = _ki_protection_decorator(False)
+disable_ki_protection = _ki_protection_decorator(
+    False
+)  # type: Callable[[F], F]
 disable_ki_protection.__name__ = "disable_ki_protection"
 
 

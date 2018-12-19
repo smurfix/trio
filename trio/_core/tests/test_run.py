@@ -4,6 +4,7 @@ import platform
 import sys
 import threading
 import time
+import types
 import warnings
 from contextlib import contextmanager
 from math import inf
@@ -97,7 +98,7 @@ def test_run_nesting():
 async def test_nursery_warn_use_async_with():
     with pytest.raises(RuntimeError) as excinfo:
         on = _core.open_nursery()
-        with on as nursery:
+        with on:
             pass  # pragma: no cover
     excinfo.match(
         r"use 'async with open_nursery\(...\)', not 'with open_nursery\(...\)'"
@@ -112,7 +113,7 @@ async def test_nursery_main_block_error_basic():
     exc = ValueError("whoops")
 
     with pytest.raises(ValueError) as excinfo:
-        async with _core.open_nursery() as nursery:
+        async with _core.open_nursery():
             raise exc
     assert excinfo.value is exc
 
@@ -182,7 +183,7 @@ def test_main_and_task_both_crash():
 
     async def main():
         async with _core.open_nursery() as nursery:
-            crasher_task = nursery.start_soon(crasher)
+            nursery.start_soon(crasher)
             raise KeyError
 
     with pytest.raises(_core.MultiError) as excinfo:
@@ -253,7 +254,7 @@ async def test_current_time():
     t1 = _core.current_time()
     # Windows clock is pretty low-resolution -- appveyor tests fail unless we
     # sleep for a bit here.
-    time.sleep(time.get_clock_info("monotonic").resolution)
+    time.sleep(time.get_clock_info("perf_counter").resolution)
     t2 = _core.current_time()
     assert t1 < t2
 
@@ -335,7 +336,7 @@ async def test_current_statistics(mock_clock):
     await _core.checkpoint()
     await _core.checkpoint()
 
-    with _core.open_cancel_scope(deadline=_core.current_time() + 5) as scope:
+    with _core.open_cancel_scope(deadline=_core.current_time() + 5):
         stats = _core.current_statistics()
         print(stats)
         assert stats.seconds_to_next_deadline == 5
@@ -834,15 +835,15 @@ async def test_timekeeping():
     TARGET = 0.1
     # give it a few tries in case of random CI server flakiness
     for _ in range(4):
-        real_start = time.monotonic()
+        real_start = time.perf_counter()
         with _core.open_cancel_scope() as scope:
             scope.deadline = _core.current_time() + TARGET
             await sleep_forever()
-        real_duration = time.monotonic() - real_start
+        real_duration = time.perf_counter() - real_start
         accuracy = real_duration / TARGET
         print(accuracy)
         # Actual time elapsed should always be >= target time
-        # (== is possible because time.monotonic on Windows is really low res)
+        # (== is possible depending on system behavior for time.perf_counter resolution
         if 1.0 <= accuracy < 2:  # pragma: no branch
             break
     else:  # pragma: no cover
@@ -1019,7 +1020,7 @@ def test_system_task_crash_KeyboardInterrupt():
 # 5) ...but it's on the run queue, so the timeout is queued to be delivered
 #    the next time that it's blocked.
 async def test_yield_briefly_checks_for_timeout(mock_clock):
-    with _core.open_cancel_scope(deadline=_core.current_time() + 5) as scope:
+    with _core.open_cancel_scope(deadline=_core.current_time() + 5):
         await _core.checkpoint()
         with pytest.raises(_core.Cancelled):
             mock_clock.jump(10)
@@ -1609,7 +1610,7 @@ def test_nice_error_on_bad_calls_to_run_or_spawn():
 def test_calling_asyncio_function_gives_nice_error():
     async def misguided():
         import asyncio
-        await asyncio.sleep(1)
+        await asyncio.Future()
 
     with pytest.raises(TypeError) as excinfo:
         _core.run(misguided)
@@ -2015,3 +2016,138 @@ async def test_Task_custom_sleep_data():
     assert task.custom_sleep_data == 1
     await _core.checkpoint()
     assert task.custom_sleep_data is None
+
+
+@types.coroutine
+def async_yield(value):
+    yield value
+
+
+async def test_permanently_detach_coroutine_object():
+    task = None
+    pdco_outcome = None
+
+    async def detachable_coroutine(task_outcome, yield_value):
+        await sleep(0)
+        nonlocal task, pdco_outcome
+        task = _core.current_task()
+        pdco_outcome = await outcome.acapture(
+            _core.permanently_detach_coroutine_object, task_outcome
+        )
+        await async_yield(yield_value)
+
+    async with _core.open_nursery() as nursery:
+        nursery.start_soon(
+            detachable_coroutine, outcome.Value(None), "I'm free!"
+        )
+
+    # If we get here then Trio thinks the task has exited... but the coroutine
+    # is still iterable
+    assert pdco_outcome is None
+    assert task.coro.send("be free!") == "I'm free!"
+    assert pdco_outcome == outcome.Value("be free!")
+    with pytest.raises(StopIteration):
+        task.coro.send(None)
+
+    # Check the exception paths too
+    task = None
+    pdco_outcome = None
+    with pytest.raises(KeyError):
+        async with _core.open_nursery() as nursery:
+            nursery.start_soon(
+                detachable_coroutine, outcome.Error(KeyError()), "uh oh"
+            )
+    throw_in = ValueError()
+    assert task.coro.throw(throw_in) == "uh oh"
+    assert pdco_outcome == outcome.Error(throw_in)
+    with pytest.raises(StopIteration):
+        task.coro.send(None)
+
+    async def bad_detach():
+        async with _core.open_nursery():
+            with pytest.raises(RuntimeError) as excinfo:
+                await _core.permanently_detach_coroutine_object(
+                    outcome.Value(None)
+                )
+            assert "open nurser" in str(excinfo.value)
+
+    async with _core.open_nursery() as nursery:
+        nursery.start_soon(bad_detach)
+
+
+async def test_detach_and_reattach_coroutine_object():
+    unrelated_task = None
+    task = None
+
+    async def unrelated_coroutine():
+        nonlocal unrelated_task
+        unrelated_task = _core.current_task()
+
+    async def reattachable_coroutine():
+        await sleep(0)
+
+        nonlocal task
+        task = _core.current_task()
+
+        def abort_fn(_):  # pragma: no cover
+            return _core.Abort.FAILED
+
+        got = await _core.temporarily_detach_coroutine_object(abort_fn)
+        assert got == "not trio!"
+
+        await async_yield(1)
+        await async_yield(2)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await _core.reattach_detached_coroutine_object(
+                unrelated_task, None
+            )
+        assert "does not match" in str(excinfo.value)
+
+        await _core.reattach_detached_coroutine_object(task, "byebye")
+
+        await sleep(0)
+
+    async with _core.open_nursery() as nursery:
+        nursery.start_soon(unrelated_coroutine)
+        nursery.start_soon(reattachable_coroutine)
+        await wait_all_tasks_blocked()
+        assert unrelated_task is not None
+        assert task is not None
+
+        # Okay, it's detached. Here's our coroutine runner:
+        assert task.coro.send("not trio!") == 1
+        assert task.coro.send(None) == 2
+        assert task.coro.send(None) == "byebye"
+
+        # Now it's been reattached, and we can leave the nursery
+
+
+async def test_detached_coroutine_cancellation():
+    abort_fn_called = False
+    task = None
+
+    async def reattachable_coroutine():
+        await sleep(0)
+
+        nonlocal task
+        task = _core.current_task()
+
+        def abort_fn(_):
+            nonlocal abort_fn_called
+            abort_fn_called = True
+            return _core.Abort.FAILED
+
+        await _core.temporarily_detach_coroutine_object(abort_fn)
+        await _core.reattach_detached_coroutine_object(task, None)
+        with pytest.raises(_core.Cancelled):
+            await sleep(0)
+
+    async with _core.open_nursery() as nursery:
+        nursery.start_soon(reattachable_coroutine)
+        await wait_all_tasks_blocked()
+        assert task is not None
+        nursery.cancel_scope.cancel()
+        task.coro.send(None)
+
+    assert abort_fn_called

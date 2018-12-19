@@ -7,7 +7,6 @@ from . import _core
 from . import socket as tsocket
 from ._util import ConflictDetector
 from .abc import HalfCloseableStream, Listener
-from ._highlevel_generic import BrokenStreamError
 
 __all__ = ["SocketStream", "SocketListener"]
 
@@ -29,7 +28,7 @@ def _translate_socket_errors_to_stream_errors():
                 "this socket was already closed"
             ) from None
         else:
-            raise BrokenStreamError(
+            raise _core.BrokenResourceError(
                 "socket connection broken: {}".format(exc)
             ) from exc
 
@@ -63,11 +62,6 @@ class SocketStream(HalfCloseableStream):
             raise TypeError("SocketStream requires trio socket object")
         if socket.type != tsocket.SOCK_STREAM:
             raise ValueError("SocketStream requires a SOCK_STREAM socket")
-        try:
-            socket.getpeername()
-        except OSError:
-            err = ValueError("SocketStream requires a connected socket")
-            raise err from None
 
         self.socket = socket
         self._send_conflict_detector = ConflictDetector(

@@ -9,6 +9,10 @@ from .. import _timeouts
 from .._timeouts import sleep_forever, move_on_after
 from .._sync import *
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:.*trio.Queue:trio.TrioDeprecationWarning"
+)
+
 
 async def test_Event():
     e = Event()
@@ -109,6 +113,21 @@ async def test_CapacityLimiter():
 
     c.release_on_behalf_of("value 3")
     c.release_on_behalf_of("value 1")
+
+
+async def test_CapacityLimiter_inf():
+    from math import inf
+    c = CapacityLimiter(inf)
+    repr(c)  # smoke test
+    assert c.total_tokens == inf
+    assert c.borrowed_tokens == 0
+    assert c.available_tokens == inf
+    with pytest.raises(RuntimeError):
+        c.release()
+    assert c.borrowed_tokens == 0
+    c.acquire_nowait()
+    assert c.borrowed_tokens == 1
+    assert c.available_tokens == inf
 
 
 async def test_CapacityLimiter_change_total_tokens():
@@ -228,10 +247,11 @@ async def test_Semaphore_bounded():
 
 
 @pytest.mark.parametrize(
-    "lockcls", [Lock, StrictFIFOLock], ids=lambda fn: fn.__name__
+    "lockcls",
+    [Lock, StrictFIFOLock], ids=lambda fn: fn.__name__
 )
 async def test_Lock_and_StrictFIFOLock(lockcls):
-    l = lockcls()
+    l = lockcls()  # noqa
     assert not l.locked()
 
     # make sure locks can be weakref'ed (gh-331)
@@ -310,7 +330,7 @@ async def test_Condition():
         Condition(Semaphore(1))
     with pytest.raises(TypeError):
         Condition(StrictFIFOLock)
-    l = Lock()
+    l = Lock()  # noqa
     c = Condition(l)
     assert not l.locked()
     assert not c.locked()
@@ -557,10 +577,76 @@ async def test_Queue_unbuffered():
         q.get_nowait()
 
 
-# Two ways of implementing a Lock in terms of a Queue. Used to let us put the
-# Queue through the generic lock tests.
-
 from .._sync import async_cm
+from .._channel import open_memory_channel
+
+# Three ways of implementing a Lock in terms of a channel. Used to let us put
+# the channel through the generic lock tests.
+
+
+@async_cm
+class ChannelLock1:
+    def __init__(self, capacity):
+        self.s, self.r = open_memory_channel(capacity)
+        for _ in range(capacity - 1):
+            self.s.send_nowait(None)
+
+    def acquire_nowait(self):
+        self.s.send_nowait(None)
+
+    async def acquire(self):
+        await self.s.send(None)
+
+    def release(self):
+        self.r.receive_nowait()
+
+
+@async_cm
+class ChannelLock2:
+    def __init__(self):
+        self.s, self.r = open_memory_channel(10)
+        self.s.send_nowait(None)
+
+    def acquire_nowait(self):
+        self.r.receive_nowait()
+
+    async def acquire(self):
+        await self.r.receive()
+
+    def release(self):
+        self.s.send_nowait(None)
+
+
+@async_cm
+class ChannelLock3:
+    def __init__(self):
+        self.s, self.r = open_memory_channel(0)
+        # self.acquired is true when one task acquires the lock and
+        # only becomes false when it's released and no tasks are
+        # waiting to acquire.
+        self.acquired = False
+
+    def acquire_nowait(self):
+        assert not self.acquired
+        self.acquired = True
+
+    async def acquire(self):
+        if self.acquired:
+            await self.s.send(None)
+        else:
+            self.acquired = True
+            await _core.checkpoint()
+
+    def release(self):
+        try:
+            self.r.receive_nowait()
+        except _core.WouldBlock:
+            assert self.acquired
+            self.acquired = False
+
+
+# Three ways of implementing a Lock in terms of a Queue. Used to let us put
+# the Queue through the generic lock tests.
 
 
 @async_cm
@@ -629,6 +715,10 @@ lock_factories = [
     lambda: Semaphore(1),
     Lock,
     StrictFIFOLock,
+    lambda: ChannelLock1(10),
+    lambda: ChannelLock1(1),
+    ChannelLock2,
+    ChannelLock3,
     lambda: QueueLock1(10),
     lambda: QueueLock1(1),
     QueueLock2,
@@ -639,6 +729,10 @@ lock_factory_names = [
     "Semaphore(1)",
     "Lock",
     "StrictFIFOLock",
+    "ChannelLock1(10)",
+    "ChannelLock1(1)",
+    "ChannelLock2",
+    "ChannelLock3",
     "QueueLock1(10)",
     "QueueLock1(1)",
     "QueueLock2",

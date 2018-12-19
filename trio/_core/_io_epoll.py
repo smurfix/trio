@@ -29,7 +29,8 @@ class EpollWaiters:
         # XX not sure if EPOLLEXCLUSIVE is actually safe... I think
         # probably we should use it here unconditionally, but:
         # https://stackoverflow.com/questions/41582560/how-does-epolls-epollexclusive-mode-interact-with-level-triggering
-        #flags |= select.EPOLLEXCLUSIVE
+
+        # flags |= select.EPOLLEXCLUSIVE
         # We used to use ONESHOT here also, but it turns out that it's
         # confusing/complicated: you can't use ONESHOT+EPOLLEXCLUSIVE
         # together, you ONESHOT doesn't delete the registration but just
@@ -103,7 +104,7 @@ class EpollIOManager:
         waiters = self._registered[fd]
         if getattr(waiters, attr_name) is not None:
             await _core.checkpoint()
-            raise _core.ResourceBusyError(
+            raise _core.BusyResourceError(
                 "another task is already reading / writing this fd"
             )
         setattr(waiters, attr_name, _core.current_task())

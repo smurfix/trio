@@ -53,7 +53,7 @@ create complex transport configurations. Here's some examples:
      # Set up SSL connection to proxy:
      s1 = SSLStream(s0, proxy_ssl_context, server_hostname="proxy")
      # Request a connection to the website
-     await s1.send_all(b"CONNECT website:443 / HTTP/1.0\r\n")
+     await s1.send_all(b"CONNECT website:443 / HTTP/1.0\r\n\r\n")
      await check_CONNECT_response(s1)
 
      # Set up SSL connection to the real website. Notice that s1 is
@@ -61,7 +61,7 @@ create complex transport configurations. Here's some examples:
      # SSLStream object around it.
      s2 = SSLStream(s1, website_ssl_context, server_hostname="website")
      # Make our request
-     await s2.send_all("GET /index.html HTTP/1.0\r\n")
+     await s2.send_all(b"GET /index.html HTTP/1.0\r\n\r\n")
      ...
 
 * The :mod:`trio.testing` module provides a set of :ref:`flexible
@@ -118,6 +118,16 @@ Abstract base classes
      - :meth:`~Listener.accept`
      -
      - :class:`~trio.SocketListener`, :class:`~trio.ssl.SSLListener`
+   * - :class:`SendChannel`
+     - :class:`AsyncResource`
+     - :meth:`~SendChannel.send`, :meth:`~SendChannel.send_nowait`
+     -
+     - :func:`~trio.open_memory_channel`
+   * - :class:`ReceiveChannel`
+     - :class:`AsyncResource`
+     - :meth:`~ReceiveChannel.receive`, :meth:`~ReceiveChannel.receive_nowait`
+     - ``__aiter__``, ``__anext__``
+     - :func:`~trio.open_memory_channel`
 
 .. autoclass:: trio.abc.AsyncResource
    :members:
@@ -144,13 +154,17 @@ Abstract base classes
    :members:
    :show-inheritance:
 
-.. currentmodule:: trio
-
-.. autoexception:: BrokenStreamError
-
 .. currentmodule:: trio.abc
 
 .. autoclass:: trio.abc.Listener
+   :members:
+   :show-inheritance:
+
+.. autoclass:: trio.abc.SendChannel
+   :members:
+   :show-inheritance:
+
+.. autoclass:: trio.abc.ReceiveChannel
    :members:
    :show-inheritance:
 

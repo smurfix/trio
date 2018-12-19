@@ -7,10 +7,10 @@ import os
 import re
 from pathlib import Path
 import subprocess
+import warnings
 
 from .tutil import slow
 
-from ..._deprecate import TrioDeprecationWarning
 from .._multierror import MultiError, concat_tb
 
 
@@ -206,7 +206,10 @@ def test_MultiError_filter():
 
 def test_MultiError_catch():
     # No exception to catch
-    noop = lambda _: None  # pragma: no cover
+
+    def noop(_):
+        pass  # pragma: no cover
+
     with MultiError.catch(noop):
         pass
 

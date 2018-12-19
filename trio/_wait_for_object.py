@@ -1,25 +1,19 @@
+import math
 from . import _timeouts
 from . import _core
 from ._threads import run_sync_in_worker_thread
 from ._core._windows_cffi import ffi, kernel32, ErrorCodes, raise_winerror, _handle
+from ._sync import CapacityLimiter
 
 __all__ = ["WaitForSingleObject"]
 
 
-class StubLimiter:
-    def release_on_behalf_of(self, x):
-        pass
-
-    async def acquire_on_behalf_of(self, x):
-        pass
-
-
 async def WaitForSingleObject(obj):
     """Async and cancellable variant of WaitForSingleObject. Windows only.
-    
+
     Args:
       handle: A Win32 handle, as a Python integer.
-    
+
     Raises:
       OSError: If the handle is invalid, e.g. when it is already closed.
 
@@ -45,7 +39,7 @@ async def WaitForSingleObject(obj):
             handle,
             cancel_handle,
             cancellable=True,
-            limiter=StubLimiter(),
+            limiter=CapacityLimiter(math.inf),
         )
     finally:
         # Clean up our cancel handle. In case we get here because this task was
@@ -56,7 +50,7 @@ async def WaitForSingleObject(obj):
 
 def WaitForMultipleObjects_sync(*handles):
     """Wait for any of the given Windows handles to be signaled.
-    
+
     """
     n = len(handles)
     handle_arr = ffi.new("HANDLE[{}]".format(n))

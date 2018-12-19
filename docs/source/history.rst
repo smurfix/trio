@@ -5,17 +5,74 @@ Release history
 
 .. towncrier release notes start
 
+Trio 0.9.0 (2018-10-12)
+-----------------------
+
+Features
+~~~~~~~~
+
+- New and improved APIs for inter-task communication:
+  :class:`trio.abc.SendChannel`, :class:`trio.abc.ReceiveChannel`, and
+  :func:`trio.open_memory_channel` (which replaces ``trio.Queue``). This
+  interface uses separate "sender" and "receiver" objects, for
+  consistency with other communication interfaces like
+  :class:`~trio.abc.Stream`. Also, the two objects can now be closed
+  individually, making it much easier to gracefully shut down a channel.
+  Also, check out the nifty ``clone`` API to make it easy to manage
+  shutdown in multiple-producer/multiple-consumer scenarios. Also, the
+  API has been written to allow for future channel implementations that
+  send objects across process boundaries. Also, it supports unbounded
+  buffering if you really need it. Also, help I can't stop writing also.
+  See :ref:`channels` for more details. (`#497
+  <https://github.com/python-trio/trio/issues/497>`__)
+
+
+Deprecations and Removals
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- ``trio.Queue`` and ``trio.hazmat.UnboundedQueue`` have been deprecated, in
+  favor of :func:`trio.open_memory_channel`. (`#497
+  <https://github.com/python-trio/trio/issues/497>`__)
+
+
+Trio 0.8.0 (2018-10-01)
+-----------------------
+
+Features
+~~~~~~~~
+
+- Trio's default internal clock is now based on :func:`time.perf_counter`
+  instead of :func:`time.monotonic`. This makes time-keeping more precise on
+  Windows, and has no effect on other platforms. (`#33
+  <https://github.com/python-trio/trio/issues/33>`__)
+- Reworked :mod:`trio`, :mod:`trio.testing`, and :mod:`trio.socket` namespace
+  construction, making them more understandable by static analysis tools. This
+  should improve tab completion in editors, reduce false positives from pylint,
+  and is a first step towards providing type hints. (`#542
+  <https://github.com/python-trio/trio/issues/542>`__)
+
+
+Deprecations and Removals
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- ``ResourceBusyError`` is now a deprecated alias for the new
+  :exc:`BusyResourceError`, and ``BrokenStreamError`` is a deprecated alias for
+  the new :exc:`BrokenResourceError`. (`#620
+  <https://github.com/python-trio/trio/issues/620>`__)
+
+
 Trio 0.7.0 (2018-09-03)
 -----------------------
 
 Features
 ~~~~~~~~
 
-- The length of typical exception traces coming from Trio has been greatly
-  reduced. This was done by eliminating many of the exception frames related to
-  details of the implementation. (`#56
-  <https://github.com/python-trio/trio/issues/56>`__, `Blog entry
-  <https://vorpus.org/blog/beautiful-tracebacks-in-trio-v070/>`__)
+- The length of typical exception traces coming from Trio has been
+  greatly reduced. This was done by eliminating many of the exception
+  frames related to details of the implementation. For examples, see
+  the `blog post
+  <https://vorpus.org/blog/beautiful-tracebacks-in-trio-v070/>`__.
+  (`#56 <https://github.com/python-trio/trio/issues/56>`__)
 - New and improved signal catching API: :func:`open_signal_receiver`. (`#354
   <https://github.com/python-trio/trio/issues/354>`__)
 - The low level :func:`trio.hazmat.wait_socket_readable`,
@@ -50,9 +107,10 @@ Deprecations and Removals
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 - ``trio.catch_signals`` has been deprecated in favor of
-  :func:`open_signal_receiver`. The main differences are: - it takes \*-args
-  now to specify the list of signals (so ``open_signal_receiver(SIGINT)``
-  instead of ``catch_signals({SIGINT})``) - the async iterator now yields
+  :func:`open_signal_receiver`. The main differences are: it takes
+  \*-args now to specify the list of signals (so
+  ``open_signal_receiver(SIGINT)`` instead of
+  ``catch_signals({SIGINT})``), and, the async iterator now yields
   individual signals, instead of "batches" (`#354
   <https://github.com/python-trio/trio/issues/354>`__)
 - Remove all the APIs deprecated in 0.3.0 and 0.4.0. (`#623
@@ -111,7 +169,7 @@ Features
   the creator's :mod:`contextvars` context, instead using one created at
   :func:`~trio.run`. (`#289
   <https://github.com/python-trio/trio/issues/289>`__)
-- Add support for :class:`trio.Queue` with `capacity=0`. Queue's implementation
+- Add support for ``trio.Queue`` with ``capacity=0``. Queue's implementation
   is also faster now. (`#473
   <https://github.com/python-trio/trio/issues/473>`__)
 - Switch to using standalone `Outcome
@@ -369,7 +427,7 @@ Upcoming breaking changes with warnings (i.e., stuff that in 0.2.0
   See `#68 <https://github.com/python-trio/trio/issues/68>`__ for
   details.
 
-* :class:`trio.Queue`\'s ``join`` and ``task_done`` methods are
+* ``trio.Queue``\'s ``join`` and ``task_done`` methods are
   deprecated without replacement (`#321
   <https://github.com/python-trio/trio/issues/321>`__)
 
@@ -396,7 +454,7 @@ Upcoming breaking changes with warnings (i.e., stuff that in 0.2.0
   * ``trio.Result`` → ``trio.hazmat.Result``
   * ``trio.Value`` → ``trio.hazmat.Value``
   * ``trio.Error`` → ``trio.hazmat.Error``
-  * ``trio.UnboundedQueue`` → :class:`trio.hazmat.UnboundedQueue`
+  * ``trio.UnboundedQueue`` → ``trio.hazmat.UnboundedQueue``
 
   In addition, several introspection attributes are being renamed:
 
@@ -469,7 +527,7 @@ Other changes
 
 * New class :class:`StrictFIFOLock`
 
-* New exception :exc:`ResourceBusyError`
+* New exception ``ResourceBusyError``
 
 * The :class:`trio.hazmat.ParkingLot` class (which is used to
   implement many of Trio's synchronization primitives) was rewritten

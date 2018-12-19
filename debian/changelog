@@ -1,3 +1,9 @@
+trio (0.9.9-1) experimental; urgency=medium
+
+  * not quite 0.10
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Wed, 19 Dec 2018 13:53:11 +0100
+
 trio (0.7.0-1) unstable; urgency=medium
 
   * Release v0.7.0

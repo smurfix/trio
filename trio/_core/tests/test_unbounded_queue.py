@@ -5,6 +5,10 @@ import pytest
 from ... import _core
 from ...testing import assert_checkpoints, wait_all_tasks_blocked
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:.*UnboundedQueue:trio.TrioDeprecationWarning"
+)
+
 
 async def test_UnboundedQueue_basic():
     q = _core.UnboundedQueue()
@@ -119,7 +123,7 @@ async def test_UnboundedQueue_trivial_yields():
 
     q.put_nowait(None)
     with assert_checkpoints():
-        async for _ in q:  # pragma: no branch
+        async for _ in q:  # noqa # pragma: no branch
             break
 
 

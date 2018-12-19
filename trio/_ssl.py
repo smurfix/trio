@@ -155,56 +155,9 @@ from enum import Enum as _Enum
 
 from . import _core
 from .abc import Stream, Listener
-from ._highlevel_generic import BrokenStreamError, aclose_forcefully
+from ._highlevel_generic import aclose_forcefully
 from . import _sync
 from ._util import ConflictDetector
-
-__all__ = ["SSLStream", "SSLListener"]
-
-################################################################
-# Faking the stdlib ssl API
-################################################################
-
-
-def _reexport(name):
-    try:
-        value = getattr(_stdlib_ssl, name)
-    except AttributeError:
-        pass
-    else:
-        globals()[name] = value
-        __all__.append(name)
-
-
-# Intentionally not re-exported:
-# SSLContext
-for _name in [
-    "SSLError",
-    "SSLZeroReturnError",
-    "SSLSyscallError",
-    "SSLEOFError",
-    "CertificateError",
-    "create_default_context",
-    "match_hostname",
-    "cert_time_to_seconds",
-    "DER_cert_to_PEM_cert",
-    "PEM_cert_to_DER_cert",
-    "get_default_verify_paths",
-    "Purpose",
-    "enum_certificates",
-    "enum_crls",
-    "SSLSession",
-    "VerifyMode",
-    "VerifyFlags",
-    "Options",
-    "AlertDescription",
-    "SSLErrorNumber",
-]:
-    _reexport(_name)
-
-for _name in _stdlib_ssl.__dict__.keys():
-    if _name == _name.upper():
-        _reexport(_name)
 
 ################################################################
 # SSLStream
@@ -228,6 +181,10 @@ class _Once:
         else:
             await self._done.wait()
 
+    @property
+    def done(self):
+        return self._done.is_set()
+
 
 _State = _Enum("_State", ["OK", "BROKEN", "CLOSED"])
 
@@ -235,7 +192,7 @@ _default_max_refill_bytes = 32 * 1024
 
 
 class SSLStream(Stream):
-    """Encrypted communication using SSL/TLS.
+    r"""Encrypted communication using SSL/TLS.
 
     :class:`SSLStream` wraps an arbitrary :class:`~trio.abc.Stream`, and
     allows you to perform encrypted communication over it using the usual
@@ -249,6 +206,15 @@ class SSLStream(Stream):
     before attempting to use this class, and probably other general
     documentation on SSL/TLS as well. SSL/TLS is subtle and quick to
     anger. Really. I'm not kidding.
+
+    To illustrate the point with an example, some of the methods of the
+    :class:`~ssl.SSLContext` return ``None`` when no handshake is established.
+    To make it behave more explicitly, we decided to raise `trio.core.NoHandshakeError`
+    in the :mod:`ssl` methods defined in ``_after_handshake``,
+    in case no handshake is established.
+
+    Note that these methods still return ``None`` in other cases, as detailed
+    in ``trio.core.NoHandshakeError``.
 
     Args:
       transport_stream (~trio.abc.Stream): The stream used to transport
@@ -264,7 +230,7 @@ class SSLStream(Stream):
           <https://en.wikipedia.org/wiki/Server_Name_Indication>`__ and for
           validating the server's certificate (if hostname checking is
           enabled). This is effectively mandatory for clients, and actually
-          mandatory if ``ssl_context.check_hostname`` is True.
+          mandatory if ``ssl_context.check_hostname`` is ``True``.
 
       server_side (bool): Whether this stream is acting as a client or
           server. Defaults to False, i.e. client mode.
@@ -390,8 +356,17 @@ class SSLStream(Stream):
         "version",
     }
 
+    _after_handshake = {
+        "get_channel_binding",
+        "selected_npn_protocol",
+        "selected_alpn_protocol",
+    }
+
     def __getattr__(self, name):
         if name in self._forwarded:
+            if name in self._after_handshake and not self._handshook.done:
+                raise _core.NoHandshakeError
+
             return getattr(self._ssl_object, name)
         else:
             raise AttributeError(name)
@@ -409,7 +384,7 @@ class SSLStream(Stream):
         if self._state is _State.OK:
             return
         elif self._state is _State.BROKEN:
-            raise BrokenStreamError
+            raise _core.BrokenResourceError
         elif self._state is _State.CLOSED:
             raise _core.ClosedResourceError
         else:  # pragma: no cover
@@ -455,9 +430,11 @@ class SSLStream(Stream):
                     ret = fn(*args)
                 except _stdlib_ssl.SSLWantReadError:
                     want_read = True
-                except (SSLError, CertificateError) as exc:
+                except (
+                    _stdlib_ssl.SSLError, _stdlib_ssl.CertificateError
+                ) as exc:
                     self._state = _State.BROKEN
-                    raise BrokenStreamError from exc
+                    raise _core.BrokenResourceError from exc
                 else:
                     finished = True
                 if ignore_want_read:
@@ -589,7 +566,7 @@ class SSLStream(Stream):
         .. warning:: If this method is cancelled, then it may leave the
            :class:`SSLStream` in an unusable state. If this happens then any
            future attempt to use the object will raise
-           :exc:`trio.BrokenStreamError`.
+           :exc:`trio.BrokenResourceError`.
 
         """
         try:
@@ -617,21 +594,22 @@ class SSLStream(Stream):
            or a renegotiation are in progress, then it may leave the
            :class:`SSLStream` in an unusable state. If this happens then any
            future attempt to use the object will raise
-           :exc:`trio.BrokenStreamError`.
+           :exc:`trio.BrokenResourceError`.
 
         """
         async with self._outer_recv_conflict_detector:
             self._check_status()
             try:
                 await self._handshook.ensure(checkpoint=False)
-            except BrokenStreamError as exc:
+            except _core.BrokenResourceError as exc:
                 # For some reason, EOF before handshake sometimes raises
                 # SSLSyscallError instead of SSLEOFError (e.g. on my linux
                 # laptop, but not on appveyor). Thanks openssl.
                 if (
-                    self._https_compatible and
-                    isinstance(exc.__cause__,
-                               (SSLEOFError, SSLSyscallError))
+                    self._https_compatible and isinstance(
+                        exc.__cause__,
+                        (_stdlib_ssl.SSLEOFError, _stdlib_ssl.SSLSyscallError)
+                    )
                 ):
                     return b""
                 else:
@@ -641,7 +619,7 @@ class SSLStream(Stream):
                 raise ValueError("max_bytes must be >= 1")
             try:
                 return await self._retry(self._ssl_object.read, max_bytes)
-            except BrokenStreamError as exc:
+            except _core.BrokenResourceError as exc:
                 # This isn't quite equivalent to just returning b"" in the
                 # first place, because we still end up with self._state set to
                 # BROKEN. But that's actually fine, because after getting an
@@ -649,7 +627,7 @@ class SSLStream(Stream):
                 # stream, and closing doesn't care about the state.
                 if (
                     self._https_compatible
-                    and isinstance(exc.__cause__, SSLEOFError)
+                    and isinstance(exc.__cause__, _stdlib_ssl.SSLEOFError)
                 ):
                     return b""
                 else:
@@ -663,7 +641,7 @@ class SSLStream(Stream):
         .. warning:: If this method is cancelled, then it may leave the
            :class:`SSLStream` in an unusable state. If this happens then any
            attempt to use the object will raise
-           :exc:`trio.BrokenStreamError`.
+           :exc:`trio.BrokenResourceError`.
 
         """
         async with self._outer_send_conflict_detector:
@@ -694,7 +672,7 @@ class SSLStream(Stream):
 
         """
         async with self._outer_recv_conflict_detector, \
-                   self._outer_send_conflict_detector:
+                self._outer_send_conflict_detector:
             self._check_status()
             await self._handshook.ensure(checkpoint=False)
             await self._retry(self._ssl_object.unwrap)
@@ -756,9 +734,9 @@ class SSLStream(Stream):
             # Also, because the other side might have already sent
             # close_notify and closed their connection then it's possible that
             # our attempt to send close_notify will raise
-            # BrokenStreamError. This is totally legal, and in fact can happen
+            # BrokenResourceError. This is totally legal, and in fact can happen
             # with two well-behaved trio programs talking to each other, so we
-            # don't want to raise an error. So we suppress BrokenStreamError
+            # don't want to raise an error. So we suppress BrokenResourceError
             # here. (This is safe, because literally the only thing this call
             # to _retry will do is send the close_notify alert, so that's
             # surely where the error comes from.)
@@ -780,7 +758,7 @@ class SSLStream(Stream):
                 await self._retry(
                     self._ssl_object.unwrap, ignore_want_read=True
                 )
-            except (BrokenStreamError, _core.ResourceBusyError):
+            except (_core.BrokenResourceError, _core.BusyResourceError):
                 pass
         except:
             # Failure! Kill the stream and move on.

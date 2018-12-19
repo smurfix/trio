@@ -11,7 +11,7 @@ from contextlib import contextmanager, closing
 
 from contextvars import copy_context
 from math import inf
-from time import monotonic
+from time import perf_counter
 
 from sniffio import current_async_library_cvar
 
@@ -24,14 +24,14 @@ from . import _public
 from ._entry_queue import EntryQueue, TrioToken
 from ._exceptions import (TrioInternalError, RunFinishedError, Cancelled)
 from ._ki import (
-    LOCALS_KEY_KI_PROTECTION_ENABLED, currently_ki_protected, ki_manager,
-    enable_ki_protection
+    LOCALS_KEY_KI_PROTECTION_ENABLED, ki_manager, enable_ki_protection
 )
 from ._multierror import MultiError
 from ._traps import (
     Abort,
     wait_task_rescheduled,
     CancelShieldedCheckpoint,
+    PermanentlyDetachCoroutineObject,
     WaitTaskRescheduled,
 )
 from .. import _core
@@ -94,15 +94,18 @@ CONTEXT_RUN_TB_FRAMES = _count_context_run_tb_frames()
 @attr.s(frozen=True)
 class SystemClock:
     # Add a large random offset to our clock to ensure that if people
-    # accidentally call time.monotonic() directly or start comparing clocks
+    # accidentally call time.perf_counter() directly or start comparing clocks
     # between different runs, then they'll notice the bug quickly:
     offset = attr.ib(default=attr.Factory(lambda: _r.uniform(10000, 200000)))
 
     def start_clock(self):
         pass
 
+    # In cPython 3, on every platform except Windows, perf_counter is
+    # exactly the same as time.monotonic; and on Windows, it uses
+    # QueryPerformanceCounter instead of GetTickCount64.
     def current_time(self):
-        return self.offset + monotonic()
+        return self.offset + perf_counter()
 
     def deadline_to_sleep_time(self, deadline):
         return deadline - self.current_time()
@@ -408,6 +411,13 @@ class NurseryManager:
 
 
 def open_nursery():
+    """Returns an async context manager which must be used to create a
+    new ``Nursery``.
+
+    It does not block on entry; on exit it blocks until all child tasks
+    have exited.
+
+    """
     return NurseryManager()
 
 
@@ -445,9 +455,8 @@ class Nursery:
         self.cancel_scope.cancel()
 
     def _check_nursery_closed(self):
-        if (
-            not self._nested_child_running and not self._children
-            and not self._pending_starts
+        if not any(
+            [self._nested_child_running, self._children, self._pending_starts]
         ):
             self._closed = True
             if self._parent_waiting_in_aexit:
@@ -748,7 +757,7 @@ class Runner:
     @_public
     def current_root_task(self):
         """Returns the current root :class:`Task`.
-        
+
         This is the task that is the ultimate parent of all other tasks.
 
         """
@@ -882,8 +891,9 @@ class Runner:
             # Give good error for: nursery.start_soon(some_sync_fn)
             raise TypeError(
                 "trio expected an async function, but {!r} appears to be "
-                "synchronous"
-                .format(getattr(async_fn, "__qualname__", async_fn))
+                "synchronous".format(
+                    getattr(async_fn, "__qualname__", async_fn)
+                )
             )
 
         ######
@@ -1206,7 +1216,7 @@ def run(
     instruments=(),
     restrict_keyboard_interrupt_to_checkpoints=False
 ):
-    """Run a trio-flavored async function, and return the outcome.
+    """Run a trio-flavored async function, and return the result.
 
     Calling::
 
@@ -1472,6 +1482,9 @@ def run_impl(runner, async_fn, args):
                     if runner.ki_pending and task is runner.main_task:
                         task._attempt_delivery_of_pending_ki()
                     task._attempt_delivery_of_any_pending_cancel()
+                elif type(msg) is PermanentlyDetachCoroutineObject:
+                    # Pretend the task just exited with the given outcome
+                    runner.task_exited(task, msg.final_outcome)
                 else:
                     exc = TypeError(
                         "trio.run received unrecognized yield message {!r}. "
@@ -1574,7 +1587,7 @@ async def checkpoint():
     :func:`checkpoint`.)
 
     """
-    with open_cancel_scope(deadline=-inf) as scope:
+    with open_cancel_scope(deadline=-inf):
         await _core.wait_task_rescheduled(lambda _: _core.Abort.SUCCEEDED)
 
 

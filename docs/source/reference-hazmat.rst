@@ -46,7 +46,7 @@ Debugging and instrumentation
 
 Trio tries hard to provide useful hooks for debugging and
 instrumentation. Some are documented above (the nursery introspection
-attributes, :meth:`trio.Queue.statistics`, etc.). Here are some more.
+attributes, :meth:`trio.Lock.statistics`, etc.). Here are some more.
 
 
 Global statistics
@@ -134,7 +134,7 @@ All environments provide the following functions:
    different, and this works on ``SOCKET`` handles or Python socket
    objects.
 
-   :raises trio.ResourceBusyError:
+   :raises trio.BusyResourceError:
        if another task is already waiting for the given socket to
        become readable.
 
@@ -148,7 +148,7 @@ All environments provide the following functions:
    different, and this works on ``SOCKET`` handles or Python socket
    objects.
 
-   :raises trio.ResourceBusyError:
+   :raises trio.BusyResourceError:
        if another task is already waiting for the given socket to
        become writable.
    :raises trio.ClosedResourceError:
@@ -192,7 +192,7 @@ Unix-like systems provide the following functions:
 
    :arg fd:
        integer file descriptor, or else an object with a ``fileno()`` method
-   :raises trio.ResourceBusyError:
+   :raises trio.BusyResourceError:
        if another task is already waiting for the given fd to
        become readable.
    :raises trio.ClosedResourceError:
@@ -213,7 +213,7 @@ Unix-like systems provide the following functions:
 
    :arg fd:
        integer file descriptor, or else an object with a ``fileno()`` method
-   :raises trio.ResourceBusyError:
+   :raises trio.BusyResourceError:
        if another task is already waiting for the given fd to
        become writable.
    :raises trio.ClosedResourceError:
@@ -279,36 +279,6 @@ anything real. See `#26
 
 .. function:: monitor_completion_key()
    :with: queue
-
-
-Unbounded queues
-================
-
-In the section :ref:`queue`, we showed an example with two producers
-and one consumer using the same queue, where the queue size would grow
-without bound to produce unbounded latency and memory usage.
-:class:`trio.Queue` avoids this by placing an upper bound on how big
-the queue can get before ``put`` starts blocking. But what if you're
-in a situation where ``put`` can't block?
-
-There is another option: the queue consumer could get greedy. Each
-time it runs, it could eagerly consume all of the pending items before
-allowing another task to run. (In some other systems, this would
-happen automatically because their queue's ``get`` method doesn't
-invoke the scheduler unless it has to block. But :ref:`in trio, get is
-always a checkpoint <checkpoint-rule>`.) This works, but it's a bit
-risky: basically instead of applying backpressure to specifically the
-producer tasks, we're applying it to *all* the tasks in our system.
-The danger here is that if enough items have built up in the queue,
-then "stopping the world" to process them all may cause unacceptable
-latency spikes in unrelated tasks. Nonetheless, this is still the
-right choice in situations where it's impossible to apply backpressure
-more precisely. So this is the strategy implemented by
-:class:`UnboundedQueue`. The main time you should use this is when
-working with low-level APIs like :func:`monitor_kevent`.
-
-.. autoclass:: UnboundedQueue
-   :members:
 
 
 Global state: system tasks and run-local variables
@@ -582,3 +552,41 @@ Task API
       used to share data between the different tasks involved in
       putting a task to sleep and then waking it up again. (See
       :func:`wait_task_rescheduled` for details.)
+
+
+.. _live-coroutine-handoff:
+
+Handing off live coroutine objects between coroutine runners
+------------------------------------------------------------
+
+Internally, Python's async/await syntax is built around the idea of
+"coroutine objects" and "coroutine runners". A coroutine object
+represents the state of an async callstack. But by itself, this is
+just a static object that sits there. If you want it to do anything,
+you need a coroutine runner to push it forward. Every Trio task has an
+associated coroutine object (see :data:`Task.coro`), and the Trio
+scheduler acts as their coroutine runner.
+
+But of course, Trio isn't the only coroutine runner in Python –
+:mod:`asyncio` has one, other event loops have them, you can even
+define your own.
+
+And in some very, very unusual circumstances, it even makes sense to
+transfer a single coroutine object back and forth between different
+coroutine runners. That's what this section is about. This is an
+*extremely* exotic use case, and assumes a lot of expertise in how
+Python async/await works internally. For motivating examples, see
+`trio-asyncio issue #42
+<https://github.com/python-trio/trio-asyncio/issues/42>`__, and `trio
+issue #649 <https://github.com/python-trio/trio/issues/649>`__. For
+more details on how coroutines work, we recommend André Caron's `A
+tale of event loops
+<https://github.com/AndreLouisCaron/a-tale-of-event-loops>`__, or
+going straight to `PEP 492
+<https://www.python.org/dev/peps/pep-0492/>`__ for the full details.
+
+.. autofunction:: permanently_detach_coroutine_object
+
+.. autofunction:: temporarily_detach_coroutine_object
+
+.. autofunction:: reattach_detached_coroutine_object

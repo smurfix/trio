@@ -83,7 +83,9 @@ if sys.version_info < (3, 5, 2):
 
         return __aiter__
 else:
-    aiter_compat = lambda aiter_impl: aiter_impl
+
+    def aiter_compat(aiter_impl):
+        return aiter_impl
 
 
 # See: #461 as to why this is needed.
@@ -110,7 +112,7 @@ class _ConflictDetectorSync:
 
     def __enter__(self):
         if self._held:
-            raise _core.ResourceBusyError(self._msg)
+            raise _core.BusyResourceError(self._msg)
         else:
             self._held = True
 
@@ -177,9 +179,9 @@ def fixup_module_metadata(module_name, namespace):
                 for attr_value in obj.__dict__.values():
                     fix_one(attr_value)
 
-    for objname in namespace["__all__"]:
-        obj = namespace[objname]
-        fix_one(obj)
+    for objname, obj in namespace.items():
+        if not objname.startswith("_"):  # ignore private attributes
+            fix_one(obj)
 
 
 # os.fspath is defined on Python 3.6+ but we need to support Python 3.5 too
@@ -239,4 +241,4 @@ def fspath(path) -> t.Union[str, bytes]:
 
 
 if hasattr(os, "fspath"):
-    fspath = os.fspath
+    fspath = os.fspath  # noqa
