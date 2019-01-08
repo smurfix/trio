@@ -1,3 +1,9 @@
+trio (0.10.0-1) unstable; urgency=medium
+
+  * Merge v0.10.0
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Tue, 08 Jan 2019 11:30:21 +0100
+
 trio (0.9.9-1) experimental; urgency=medium
 
   * not quite 0.10
