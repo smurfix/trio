@@ -1,4 +1,5 @@
 from abc import ABCMeta, abstractmethod
+from typing import Generic, TypeVar
 from ._util import aiter_compat
 from . import _core
 
@@ -241,7 +242,7 @@ class AsyncResource(metaclass=ABCMeta):
         connection. This requires sending a "goodbye" message; but if the peer
         has become non-responsive, then our attempt to send this message might
         block forever, and eventually time out and be cancelled. In this case
-        the :meth:`aclose` method on :class:`~trio.ssl.SSLStream` will
+        the :meth:`aclose` method on :class:`~trio.SSLStream` will
         immediately close the underlying transport stream using
         :func:`trio.aclose_forcefully` before raising :exc:`~trio.Cancelled`.
 
@@ -463,7 +464,7 @@ class HalfCloseableStream(Stream):
 
         * On an SSL/TLS-encrypted connection, the protocol doesn't provide any
           way to do a unidirectional shutdown without closing the connection
-          entirely, so :class:`~trio.ssl.SSLStream` implements
+          entirely, so :class:`~trio.SSLStream` implements
           :class:`Stream`, not :class:`HalfCloseableStream`.
 
         If an EOF has already been sent, then this method should silently
@@ -483,7 +484,22 @@ class HalfCloseableStream(Stream):
         """
 
 
-class Listener(AsyncResource):
+# The type of object produced by a ReceiveChannel (covariant because
+# ReceiveChannel[Derived] can be passed to someone expecting
+# ReceiveChannel[Base])
+T_co = TypeVar("T_co", covariant=True)
+
+# The type of object accepted by a SendChannel (contravariant because
+# SendChannel[Base] can be passed to someone expecting
+# SendChannel[Derived])
+T_contra = TypeVar("T_contra", contravariant=True)
+
+# The type of object produced by a Listener (covariant plus must be
+# an AsyncResource)
+T_resource = TypeVar("T_resource", bound=AsyncResource, covariant=True)
+
+
+class Listener(AsyncResource, Generic[T_resource]):
     """A standard interface for listening for incoming connections.
 
     :class:`Listener` objects also implement the :class:`AsyncResource`
@@ -521,7 +537,7 @@ class Listener(AsyncResource):
         """
 
 
-class SendChannel(AsyncResource):
+class SendChannel(AsyncResource, Generic[T_contra]):
     """A standard interface for sending Python objects to some receiver.
 
     :class:`SendChannel` objects also implement the :class:`AsyncResource`
@@ -595,7 +611,7 @@ class SendChannel(AsyncResource):
         """
 
 
-class ReceiveChannel(AsyncResource):
+class ReceiveChannel(AsyncResource, Generic[T_co]):
     """A standard interface for receiving Python objects from some sender.
 
     You can iterate over a :class:`ReceiveChannel` using an ``async for``

@@ -18,8 +18,8 @@ from ._version import __version__
 from ._core import (
     TrioInternalError, RunFinishedError, WouldBlock, Cancelled,
     BusyResourceError, ClosedResourceError, MultiError, run, open_nursery,
-    open_cancel_scope, current_effective_deadline, TASK_STATUS_IGNORED,
-    current_time, BrokenResourceError, EndOfChannel
+    CancelScope, open_cancel_scope, current_effective_deadline,
+    TASK_STATUS_IGNORED, current_time, BrokenResourceError, EndOfChannel
 )
 
 from ._timeouts import (
@@ -28,7 +28,7 @@ from ._timeouts import (
 )
 
 from ._sync import (
-    Event, CapacityLimiter, Semaphore, Lock, StrictFIFOLock, Condition, Queue
+    Event, CapacityLimiter, Semaphore, Lock, StrictFIFOLock, Condition
 )
 
 from ._threads import (
@@ -40,13 +40,17 @@ from ._highlevel_generic import aclose_forcefully, StapledStream
 
 from ._channel import open_memory_channel
 
-from ._signals import catch_signals, open_signal_receiver
+from ._signals import open_signal_receiver
 
 from ._highlevel_socket import SocketStream, SocketListener
 
 from ._file_io import open_file, wrap_file
 
 from ._path import Path
+
+from ._subprocess import Process
+
+from ._ssl import SSLStream, SSLListener, NeedHandshakeError
 
 from ._highlevel_serve_listeners import serve_listeners
 
@@ -66,24 +70,35 @@ from ._deprecate import TrioDeprecationWarning
 from . import hazmat
 from . import socket
 from . import abc
-from . import ssl
-from . import subprocess
 # Not imported by default: testing
 if False:
     from . import testing
 
+from . import _deprecated_ssl_reexports
+from . import _deprecated_subprocess_reexports
+
 _deprecate.enable_attribute_deprecations(__name__)
 __deprecated_attributes__ = {
-    "BrokenStreamError":
+    "ssl":
         _deprecate.DeprecatedAttribute(
-            BrokenResourceError,
-            "0.8.0",
-            issue=620,
-            instead=BrokenResourceError
+            _deprecated_ssl_reexports,
+            "0.11.0",
+            issue=852,
+            instead=(
+                "trio.SSLStream, trio.SSLListener, trio.NeedHandshakeError, "
+                "and the standard library 'ssl' module (minus SSLSocket and "
+                "wrap_socket())"
+            ),
         ),
-    "ResourceBusyError":
+    "subprocess":
         _deprecate.DeprecatedAttribute(
-            BusyResourceError, "0.8.0", issue=620, instead=BusyResourceError
+            _deprecated_subprocess_reexports,
+            "0.11.0",
+            issue=852,
+            instead=(
+                "trio.Process and the constants in the standard "
+                "library 'subprocess' module"
+            ),
         ),
 }
 
@@ -98,5 +113,8 @@ fixup_module_metadata(__name__, globals())
 fixup_module_metadata(hazmat.__name__, hazmat.__dict__)
 fixup_module_metadata(socket.__name__, socket.__dict__)
 fixup_module_metadata(abc.__name__, abc.__dict__)
-fixup_module_metadata(ssl.__name__, ssl.__dict__)
+fixup_module_metadata(__name__ + ".ssl", _deprecated_ssl_reexports.__dict__)
+fixup_module_metadata(
+    __name__ + ".subprocess", _deprecated_subprocess_reexports.__dict__
+)
 del fixup_module_metadata

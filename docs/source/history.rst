@@ -5,6 +5,97 @@ Release history
 
 .. towncrier release notes start
 
+Trio 0.11.0 (2019-02-09)
+------------------------
+
+Features
+~~~~~~~~
+
+- Add support for "unbound cancel scopes": you can now construct a
+  :class:`trio.CancelScope` without entering its context, e.g., so you
+  can pass it to another task which will use it to wrap some work that
+  you want to be able to cancel from afar. (`#607 <https://github.com/python-trio/trio/issues/607>`__)
+- The test suite now passes with openssl v1.1.1. Unfortunately this
+  required temporarily disabling TLS v1.3 during tests; see openssl bugs
+  `#7948 <https://github.com/openssl/openssl/issues/7948>`__ and `#7967
+  <https://github.com/openssl/openssl/issues/7967>`__. We believe TLS
+  v1.3 should work in most real use cases, but will be monitoring the
+  situation. (`#817 <https://github.com/python-trio/trio/issues/817>`__)
+- Add :attr:`trio.Process.stdio`, which is a :class:`~trio.StapledStream` of
+  :attr:`~trio.Process.stdin` and :attr:`~trio.Process.stdout` if both of those
+  are available, and ``None`` otherwise. This is intended to make it more
+  ergonomic to speak a back-and-forth protocol with a subprocess. (`#862 <https://github.com/python-trio/trio/issues/862>`__)
+- :class:`trio.Process` on POSIX systems no longer accepts the error-prone
+  combination of ``shell=False`` with a ``command`` that's a single string,
+  or ``shell=True`` with a ``command`` that's a sequence of strings.
+  These forms are accepted by the underlying :class:`subprocess.Popen`
+  constructor but don't do what most users expect. Also, added an explanation
+  of :ref:`quoting <subprocess-quoting>` to the documentation. (`#863 <https://github.com/python-trio/trio/issues/863>`__)
+- Added an internal mechanism for pytest-trio's
+  `Hypothesis <https://hypothesis.readthedocs.io>`__ integration
+  to make the task scheduler reproducible and avoid flaky tests. (`#890 <https://github.com/python-trio/trio/issues/890>`__)
+- :class:`~trio.abc.SendChannel`, :class:`~trio.abc.ReceiveChannel`, :class:`~trio.abc.Listener`,
+  and :func:`~trio.open_memory_channel` can now be referenced using a generic type parameter
+  (the type of object sent over the channel or produced by the listener) using PEP 484 syntax:
+  ``trio.abc.SendChannel[bytes]``, ``trio.abc.Listener[trio.SocketStream]``,
+  ``trio.open_memory_channel[MyMessage](5)``, etc. The added type information does not change
+  the runtime semantics, but permits better integration with external static type checkers. (`#908 <https://github.com/python-trio/trio/issues/908>`__)
+
+
+Bugfixes
+~~~~~~~~
+
+- Fixed several bugs in the new Unix subprocess pipe support, where
+  (a) operations on a closed pipe could accidentally affect another
+  unrelated pipe due to internal file-descriptor reuse, (b) in very rare
+  circumstances, two tasks calling ``send_all`` on the same pipe at the
+  same time could end up with intermingled data instead of a
+  :exc:`BusyResourceError`. (`#661 <https://github.com/python-trio/trio/issues/661>`__)
+- Stop :func:`trio.open_tcp_listeners` from crashing on systems that have
+  disabled IPv6. (`#853 <https://github.com/python-trio/trio/issues/853>`__)
+- Fixed support for multiple tasks calling :meth:`trio.Process.wait`
+  simultaneously; on kqueue platforms it would previously raise an exception. (`#854 <https://github.com/python-trio/trio/issues/854>`__)
+- :exc:`trio.Cancelled` exceptions now always propagate until they reach
+  the outermost unshielded cancelled scope, even if more cancellations
+  occur or shielding is changed between when the :exc:`~trio.Cancelled`
+  is delivered and when it is caught. (`#860 <https://github.com/python-trio/trio/issues/860>`__)
+- If you have a :class:`SocketStream` that's already been closed, then
+  ``await socket_stream.send_all(b"")`` will now correctly raise
+  :exc:`ClosedResourceError`. (`#874 <https://github.com/python-trio/trio/issues/874>`__)
+- Simplified the Windows subprocess pipe ``send_all`` code, and in the
+  process fixed a theoretical bug where closing a pipe at just the wrong
+  time could produce errors or cause data to be redirected to the wrong
+  pipe. (`#883 <https://github.com/python-trio/trio/issues/883>`__)
+
+
+Deprecations and Removals
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- Deprecate ``trio.open_cancel_scope`` in favor of :class:`trio.CancelScope`,
+  which more clearly reflects that creating a cancel scope is just an ordinary
+  object construction and does not need to be immediately paired with entering it. (`#607 <https://github.com/python-trio/trio/issues/607>`__)
+- The submodules ``trio.ssl`` and ``trio.subprocess`` are now deprecated.
+  Their nontrivial contents (:class:`~trio.Process`, :class:`~trio.SSLStream`,
+  and :class:`~trio.SSLListener`) have been moved to the main :mod:`trio`
+  namespace. For the numerous constants, exceptions, and other helpers
+  that were previously reexported from the standard :mod:`ssl` and
+  :mod:`subprocess` modules, you should now use those modules directly. (`#852 <https://github.com/python-trio/trio/issues/852>`__)
+- Remove all the APIs deprecated in 0.9.0 or earlier (``trio.Queue``,
+  ``trio.catch_signals()``, ``trio.BrokenStreamError``, and
+  ``trio.ResourceBusyError``), except for ``trio.hazmat.UnboundedQueue``,
+  which stays for now since it is used by the obscure hazmat functions
+  ``monitor_completion_queue()`` and ``monitor_kevent()``. (`#918 <https://github.com/python-trio/trio/issues/918>`__)
+
+
+Miscellaneous internal changes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- Entering a cancel scope whose deadline is in the past now immediately
+  cancels it, so :exc:`~trio.Cancelled` will be raised by the first
+  checkpoint in the cancel scope rather than the second one.
+  This also affects constructs like ``with trio.move_on_after(0):``. (`#320 <https://github.com/python-trio/trio/issues/320>`__)
+
+
 Trio 0.10.0 (2019-01-07)
 ------------------------
 
@@ -12,9 +103,9 @@ Features
 ~~~~~~~~
 
 - Initial :ref:`subprocess support <subprocess>`. Add
-  :class:`trio.subprocess.Process`, an async wrapper around the stdlib
+  :class:`trio.subprocess.Process <trio.Process>`, an async wrapper around the stdlib
   :class:`subprocess.Popen` class, which permits spawning subprocesses and
-  communicating with them over standard Trio streams. :mod:`trio.subprocess`
+  communicating with them over standard Trio streams. ``trio.subprocess``
   also reexports all the stdlib :mod:`subprocess` exceptions and constants for
   convenience. (`#4 <https://github.com/python-trio/trio/issues/4>`__)
 - You can now create an unbounded :class:`CapacityLimiter` by initializing with
@@ -49,12 +140,13 @@ Deprecations and Removals
 Miscellaneous internal changes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- There are a number of methods on :class:`trio.ssl.SSLStream` that report
-  information about the negotiated TLS connection, like
+- There are a number of methods on :class:`trio.ssl.SSLStream <trio.SSLStream>`
+  that report information about the negotiated TLS connection, like
   ``selected_alpn_protocol``, and thus cannot succeed until after the handshake
   has been performed. Previously, we returned None from these methods, like the
   stdlib :mod:`ssl` module does, but this is confusing, because that can also
-  be a valid return value. Now we raise :exc:`trio.ssl.NeedHandshakeError`
+  be a valid return value. Now we raise :exc:`trio.ssl.NeedHandshakeError
+  <trio.NeedHandshakeError>`
   instead. (`#735 <https://github.com/python-trio/trio/issues/735>`__)
 
 
@@ -265,7 +357,7 @@ Deprecations and Removals
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 - Attempting to explicitly raise :exc:`trio.Cancelled` will cause a :exc:`RuntimeError`.
-  :meth:`cancel_scope.cancel() <trio.The cancel scope interface.cancel>` should
+  :meth:`cancel_scope.cancel() <trio.CancelScope.cancel>` should
   be used instead. (`#342 <https://github.com/python-trio/trio/issues/342>`__)
 
 
@@ -384,11 +476,11 @@ Highlights
   <https://daniel.haxx.se/blog/2016/11/26/https-proxy-with-curl/>`__.
   See: :func:`trio.open_ssl_over_tcp_stream`,
   :func:`trio.serve_ssl_over_tcp`,
-  :func:`trio.open_ssl_over_tcp_listeners`, and :mod:`trio.ssl`.
+  :func:`trio.open_ssl_over_tcp_listeners`, and ``trio.ssl``.
 
-  Interesting fact: the test suite for :mod:`trio.ssl` has so far
+  Interesting fact: the test suite for ``trio.ssl`` has so far
   found bugs in CPython's ssl module, PyPy's ssl module, PyOpenSSL,
-  and OpenSSL. (:mod:`trio.ssl` doesn't use PyOpenSSL.) Trio's test
+  and OpenSSL. (``trio.ssl`` doesn't use PyOpenSSL.) Trio's test
   suite is fairly thorough.
 
 * You know thread-local storage? Well, Trio now has an equivalent:
@@ -436,7 +528,7 @@ that worked on 0.1.0):
 * When a socket ``sendall`` call was cancelled, it used to attach some
   metadata to the exception reporting how much data was actually sent.
   It no longer does this, because in common configurations like an
-  :class:`~trio.ssl.SSLStream` wrapped around a
+  :class:`~trio.SSLStream` wrapped around a
   :class:`~trio.SocketStream` it becomes ambiguous which "level" the
   partial metadata applies to, leading to confusion and bugs. There is
   no longer any way to tell how much data was sent after a ``sendall``

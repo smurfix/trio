@@ -7,7 +7,9 @@ import pytest
 
 from .. import _core
 from .._threads import run_sync_in_worker_thread
-from .._util import signal_raise, ConflictDetector, fspath, is_main_thread
+from .._util import (
+    signal_raise, ConflictDetector, fspath, is_main_thread, generic_function
+)
 from ..testing import wait_all_tasks_blocked, assert_checkpoints
 
 
@@ -69,15 +71,14 @@ async def test_ConflictDetector():
 def test_module_metadata_is_fixed_up():
     import trio
     assert trio.Cancelled.__module__ == "trio"
-    assert trio.open_cancel_scope.__module__ == "trio"
-    assert trio.ssl.SSLStream.__module__ == "trio.ssl"
+    assert trio.open_nursery.__module__ == "trio"
     assert trio.abc.Stream.__module__ == "trio.abc"
     assert trio.hazmat.wait_task_rescheduled.__module__ == "trio.hazmat"
     import trio.testing
     assert trio.testing.trio_test.__module__ == "trio.testing"
 
     # Also check methods
-    assert trio.ssl.SSLStream.__init__.__module__ == "trio.ssl"
+    assert trio.hazmat.ParkingLot.__init__.__module__ == "trio.hazmat"
     assert trio.abc.Stream.send_all.__module__ == "trio.abc"
 
 
@@ -169,3 +170,17 @@ async def test_is_main_thread():
         assert not is_main_thread()
 
     await run_sync_in_worker_thread(not_main_thread)
+
+
+def test_generic_function():
+    @generic_function
+    def test_func(arg):
+        """Look, a docstring!"""
+        return arg
+
+    assert test_func is test_func[int] is test_func[int, str]
+    assert test_func(42) == test_func[int](42) == 42
+    assert test_func.__doc__ == "Look, a docstring!"
+    assert test_func.__qualname__ == "test_generic_function.<locals>.test_func"
+    assert test_func.__name__ == "test_func"
+    assert test_func.__module__ == __name__
