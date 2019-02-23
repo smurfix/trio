@@ -36,8 +36,7 @@ async def test_magic():
 
 
 cls_pairs = [
-    (trio.Path, pathlib.Path),
-    (pathlib.Path, trio.Path),
+    (trio.Path, pathlib.Path), (pathlib.Path, trio.Path),
     (trio.Path, trio.Path)
 ]
 
@@ -54,17 +53,15 @@ async def test_cmp_magic(cls_a, cls_b):
 
     # this is intentionally testing equivalence with none, due to the
     # other=sentinel logic in _forward_magic
-    assert not a == None
-    assert not b == None
+    assert not a == None  # noqa
+    assert not b == None  # noqa
 
 
 # upstream python3.5 bug: we should also test (pathlib.Path, trio.Path), but
 # __*div__ does not properly raise NotImplementedError like the other comparison
 # magic, so trio.Path's implementation does not get dispatched
 cls_pairs = [
-    (trio.Path, pathlib.Path),
-    (trio.Path, trio.Path),
-    (trio.Path, str),
+    (trio.Path, pathlib.Path), (trio.Path, trio.Path), (trio.Path, str),
     (str, trio.Path)
 ]
 
@@ -198,3 +195,17 @@ async def test_path_nonpath():
 async def test_open_file_can_open_path(path):
     async with await trio.open_file(path, 'w') as f:
         assert f.name == fspath(path)
+
+
+async def test_iterdir(path):
+    # Populate a directory
+    await path.mkdir()
+    await (path / 'foo').mkdir()
+    await (path / 'bar.txt').write_bytes(b'')
+
+    entries = set()
+    for entry in await path.iterdir():
+        assert isinstance(entry, trio.Path)
+        entries.add(entry.name)
+
+    assert entries == {'bar.txt', 'foo'}

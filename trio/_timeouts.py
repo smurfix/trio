@@ -22,7 +22,7 @@ def move_on_at(deadline):
       deadline (float): The deadline.
 
     """
-    return _core.open_cancel_scope(deadline=deadline)
+    return _core.CancelScope(deadline=deadline)
 
 
 def move_on_after(seconds):
@@ -103,8 +103,8 @@ def fail_at(deadline):
     then both will cause :exc:`Cancelled` to be raised within the scope. The
     difference is that when the :exc:`Cancelled` exception reaches
     :func:`move_on_at`, it's caught and discarded. When it reaches
-    :func:`fail_after`, then it's caught and :exc:`TooSlowError` is raised in
-    its place.
+    :func:`fail_at`, then it's caught and :exc:`TooSlowError` is raised in its
+    place.
 
     Raises:
       TooSlowError: if a :exc:`Cancelled` exception is raised in this scope

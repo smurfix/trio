@@ -1,11 +1,9 @@
 import sys
-from functools import wraps, partial
+from functools import wraps
 from types import ModuleType
 import warnings
 
 import attr
-
-__all__ = ["TrioDeprecationWarning"]
 
 
 # We want our warnings to be visible by default (at least for now), but we

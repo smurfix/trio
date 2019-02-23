@@ -35,10 +35,7 @@ nitpick_ignore = [
     ("py:class", "trio.hazmat.RunLocal"),
     # trio.abc is documented at random places scattered throughout the docs
     ("py:mod", "trio.abc"),
-    # contextvars is added in 3.7, but the docs point to 3.6
-    # these two entries can be removed after 3.7 is released
-    ("py:mod", "contextvars"),
-    ("py:class", "contextvars.Context"),
+    ("py:class", "math.inf"),
 ]
 autodoc_inherit_docstrings = False
 
@@ -70,6 +67,7 @@ extensions = [
 
 intersphinx_mapping = {
     "python": ('https://docs.python.org/3', None),
+    "outcome": ('https://outcome.readthedocs.io/en/latest/', None),
 }
 
 autodoc_member_order = "bysource"
@@ -125,7 +123,7 @@ language = None
 exclude_patterns = []
 
 # The name of the Pygments (syntax highlighting) style to use.
-pygments_style = 'sphinx'
+pygments_style = 'default'
 
 highlight_language = 'python3'
 
@@ -159,6 +157,7 @@ html_theme_options = {
     # versions/settings...
     "navigation_depth": 4,
     "logo_only": True,
+    'prev_next_buttons_location': 'both'
 }
 
 # Add any paths that contain custom static files (such as style sheets) here,

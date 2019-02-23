@@ -11,8 +11,12 @@ typedef void* PVOID;
 typedef PVOID HANDLE;
 typedef unsigned long DWORD;
 typedef unsigned long ULONG;
+typedef unsigned int NTSTATUS;
 typedef unsigned long u_long;
 typedef ULONG *PULONG;
+typedef const void *LPCVOID;
+typedef void *LPVOID;
+typedef const wchar_t *LPCWSTR;
 
 typedef uintptr_t ULONG_PTR;
 typedef uintptr_t UINT_PTR;
@@ -35,6 +39,8 @@ typedef struct _OVERLAPPED {
 
 typedef OVERLAPPED WSAOVERLAPPED;
 typedef LPOVERLAPPED LPWSAOVERLAPPED;
+typedef PVOID LPSECURITY_ATTRIBUTES;
+typedef PVOID LPCSTR;
 
 typedef struct _OVERLAPPED_ENTRY {
     ULONG_PTR lpCompletionKey;
@@ -49,6 +55,16 @@ HANDLE WINAPI CreateIoCompletionPort(
   _In_opt_ HANDLE    ExistingCompletionPort,
   _In_     ULONG_PTR CompletionKey,
   _In_     DWORD     NumberOfConcurrentThreads
+);
+
+HANDLE CreateFileW(
+  LPCWSTR               lpFileName,
+  DWORD                 dwDesiredAccess,
+  DWORD                 dwShareMode,
+  LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+  DWORD                 dwCreationDisposition,
+  DWORD                 dwFlagsAndAttributes,
+  HANDLE                hTemplateFile
 );
 
 BOOL WINAPI CloseHandle(
@@ -76,10 +92,58 @@ BOOL WINAPI CancelIoEx(
   _In_opt_ LPOVERLAPPED lpOverlapped
 );
 
+BOOL WriteFile(
+  HANDLE       hFile,
+  LPCVOID      lpBuffer,
+  DWORD        nNumberOfBytesToWrite,
+  LPDWORD      lpNumberOfBytesWritten,
+  LPOVERLAPPED lpOverlapped
+);
+
+BOOL ReadFile(
+  HANDLE       hFile,
+  LPVOID       lpBuffer,
+  DWORD        nNumberOfBytesToRead,
+  LPDWORD      lpNumberOfBytesRead,
+  LPOVERLAPPED lpOverlapped
+);
+
 BOOL WINAPI SetConsoleCtrlHandler(
   _In_opt_ void*            HandlerRoutine,
   _In_     BOOL             Add
 );
+
+HANDLE CreateEventA(
+  LPSECURITY_ATTRIBUTES lpEventAttributes,
+  BOOL                  bManualReset,
+  BOOL                  bInitialState,
+  LPCSTR                lpName
+);
+
+BOOL SetEvent(
+  HANDLE hEvent
+);
+
+BOOL ResetEvent(
+  HANDLE hEvent
+);
+
+DWORD WaitForSingleObject(
+  HANDLE hHandle,
+  DWORD  dwMilliseconds
+);
+
+DWORD WaitForMultipleObjects(
+  DWORD        nCount,
+  HANDLE       *lpHandles,
+  BOOL         bWaitAll,
+  DWORD        dwMilliseconds
+);
+
+ULONG RtlNtStatusToDosError(
+  NTSTATUS Status
+);
+
 """
 
 # cribbed from pywincffi
@@ -100,8 +164,22 @@ ffi = cffi.FFI()
 ffi.cdef(LIB)
 
 kernel32 = ffi.dlopen("kernel32.dll")
+ntdll = ffi.dlopen("ntdll.dll")
 
 INVALID_HANDLE_VALUE = ffi.cast("HANDLE", -1)
+
+
+def _handle(obj):
+    # For now, represent handles as either cffi HANDLEs or as ints.  If you
+    # try to pass in a file descriptor instead, it's not going to work
+    # out. (For that msvcrt.get_osfhandle does the trick, but I don't know if
+    # we'll actually need that for anything...) For sockets this doesn't
+    # matter, Python never allocates an fd. So let's wait until we actually
+    # encounter the problem before worrying about it.
+    if type(obj) is int:
+        return ffi.cast("HANDLE", obj)
+    else:
+        return obj
 
 
 def raise_winerror(winerror=None, *, filename=None, filename2=None):
@@ -116,7 +194,26 @@ def raise_winerror(winerror=None, *, filename=None, filename2=None):
 
 class ErrorCodes(enum.IntEnum):
     STATUS_TIMEOUT = 0x102
+    WAIT_TIMEOUT = 0x102
+    WAIT_ABANDONED = 0x80
+    WAIT_OBJECT_0 = 0x00  # object is signaled
+    WAIT_FAILED = 0xFFFFFFFF
     ERROR_IO_PENDING = 997
     ERROR_OPERATION_ABORTED = 995
     ERROR_ABANDONED_WAIT_0 = 735
     ERROR_INVALID_HANDLE = 6
+    ERROR_INVALID_PARMETER = 87
+    ERROR_NOT_FOUND = 1168
+
+
+class FileFlags(enum.IntEnum):
+    GENERIC_READ = 0x80000000
+    FILE_FLAG_OVERLAPPED = 0x40000000
+    FILE_SHARE_READ = 1
+    FILE_SHARE_WRITE = 2
+    FILE_SHARE_DELETE = 4
+    CREATE_NEW = 1
+    CREATE_ALWAYS = 2
+    OPEN_EXISTING = 3
+    OPEN_ALWAYS = 4
+    TRUNCATE_EXISTING = 5

@@ -1,3 +1,6 @@
+"""Trio - Pythonic async I/O for humans and snake people.
+"""
+
 # General layout:
 #
 # trio/_core/... is the self-contained core library. It does various
@@ -12,59 +15,92 @@
 
 from ._version import __version__
 
-__all__ = []
+from ._core import (
+    TrioInternalError, RunFinishedError, WouldBlock, Cancelled,
+    BusyResourceError, ClosedResourceError, MultiError, run, open_nursery,
+    CancelScope, open_cancel_scope, current_effective_deadline,
+    TASK_STATUS_IGNORED, current_time, BrokenResourceError, EndOfChannel
+)
 
-from ._toplevel_core_reexports import *
-__all__ += _toplevel_core_reexports.__all__
+from ._timeouts import (
+    move_on_at, move_on_after, sleep_forever, sleep_until, sleep, fail_at,
+    fail_after, TooSlowError
+)
 
-from ._timeouts import *
-__all__ += _timeouts.__all__
+from ._sync import (
+    Event, CapacityLimiter, Semaphore, Lock, StrictFIFOLock, Condition
+)
 
-from ._sync import *
-__all__ += _sync.__all__
+from ._threads import (
+    run_sync_in_worker_thread, current_default_worker_thread_limiter,
+    BlockingTrioPortal
+)
 
-from ._threads import *
-__all__ += _threads.__all__
+from ._highlevel_generic import aclose_forcefully, StapledStream
 
-from ._highlevel_generic import *
-__all__ += _highlevel_generic.__all__
+from ._channel import open_memory_channel
 
-from ._signals import *
-__all__ += _signals.__all__
+from ._signals import open_signal_receiver
 
-from ._highlevel_socket import *
-__all__ += _highlevel_socket.__all__
+from ._highlevel_socket import SocketStream, SocketListener
 
-from ._file_io import *
-__all__ += _file_io.__all__
+from ._file_io import open_file, wrap_file
 
-from ._path import *
-__all__ += _path.__all__
+from ._path import Path
 
-from ._highlevel_serve_listeners import *
-__all__ += _highlevel_serve_listeners.__all__
+from ._subprocess import Process
 
-from ._highlevel_open_tcp_stream import *
-__all__ += _highlevel_open_tcp_stream.__all__
+from ._ssl import SSLStream, SSLListener, NeedHandshakeError
 
-from ._highlevel_open_tcp_listeners import *
-__all__ += _highlevel_open_tcp_listeners.__all__
+from ._highlevel_serve_listeners import serve_listeners
 
-from ._highlevel_open_unix_stream import *
-__all__ += _highlevel_open_unix_stream.__all__
+from ._highlevel_open_tcp_stream import open_tcp_stream
 
-from ._highlevel_ssl_helpers import *
-__all__ += _highlevel_ssl_helpers.__all__
+from ._highlevel_open_tcp_listeners import open_tcp_listeners, serve_tcp
 
-from ._deprecate import *
-__all__ += _deprecate.__all__
+from ._highlevel_open_unix_stream import open_unix_socket
+
+from ._highlevel_ssl_helpers import (
+    open_ssl_over_tcp_stream, open_ssl_over_tcp_listeners, serve_ssl_over_tcp
+)
+
+from ._deprecate import TrioDeprecationWarning
 
 # Imported by default
 from . import hazmat
 from . import socket
 from . import abc
-from . import ssl
 # Not imported by default: testing
+if False:
+    from . import testing
+
+from . import _deprecated_ssl_reexports
+from . import _deprecated_subprocess_reexports
+
+_deprecate.enable_attribute_deprecations(__name__)
+__deprecated_attributes__ = {
+    "ssl":
+        _deprecate.DeprecatedAttribute(
+            _deprecated_ssl_reexports,
+            "0.11.0",
+            issue=852,
+            instead=(
+                "trio.SSLStream, trio.SSLListener, trio.NeedHandshakeError, "
+                "and the standard library 'ssl' module (minus SSLSocket and "
+                "wrap_socket())"
+            ),
+        ),
+    "subprocess":
+        _deprecate.DeprecatedAttribute(
+            _deprecated_subprocess_reexports,
+            "0.11.0",
+            issue=852,
+            instead=(
+                "trio.Process and the constants in the standard "
+                "library 'subprocess' module"
+            ),
+        ),
+}
 
 # Having the public path in .__module__ attributes is important for:
 # - exception names in printed tracebacks
@@ -77,5 +113,8 @@ fixup_module_metadata(__name__, globals())
 fixup_module_metadata(hazmat.__name__, hazmat.__dict__)
 fixup_module_metadata(socket.__name__, socket.__dict__)
 fixup_module_metadata(abc.__name__, abc.__dict__)
-fixup_module_metadata(ssl.__name__, ssl.__dict__)
+fixup_module_metadata(__name__ + ".ssl", _deprecated_ssl_reexports.__dict__)
+fixup_module_metadata(
+    __name__ + ".subprocess", _deprecated_subprocess_reexports.__dict__
+)
 del fixup_module_metadata

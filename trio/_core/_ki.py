@@ -1,13 +1,16 @@
 import inspect
 import signal
 import sys
-import threading
 from contextlib import contextmanager
 from functools import wraps
 
 import async_generator
 
 from .._util import is_main_thread
+
+if False:
+    from typing import Any, TypeVar, Callable
+    F = TypeVar('F', bound=Callable[..., Any])
 
 __all__ = [
     "enable_ki_protection",
@@ -77,12 +80,10 @@ __all__ = [
 # for any Python program that's written to catch and ignore
 # KeyboardInterrupt.)
 
-
-# We use this class object as a unique key into the frame locals dictionary,
-# which in particular is guaranteed not to clash with any possible real local
-# name (I bet this will confuse some debugger at some point though...):
-class LOCALS_KEY_KI_PROTECTION_ENABLED:
-    pass
+# We use this special string as a unique key into the frame locals dictionary.
+# The @ ensures it is not a valid identifier and can't clash with any possible
+# real local name. See: https://github.com/python-trio/trio/issues/469
+LOCALS_KEY_KI_PROTECTION_ENABLED = '@TRIO_KI_PROTECTION_ENABLED'
 
 
 # NB: according to the signal.signal docs, 'frame' can be None on entry to
@@ -96,7 +97,7 @@ def ki_protection_enabled(frame):
 
 
 def currently_ki_protected():
-    """Check whether the calling code has :exc:`KeyboardInterrupt` protection
+    r"""Check whether the calling code has :exc:`KeyboardInterrupt` protection
     enabled.
 
     It's surprisingly easy to think that one's :exc:`KeyboardInterrupt`
@@ -168,10 +169,12 @@ def _ki_protection_decorator(enabled):
     return decorator
 
 
-enable_ki_protection = _ki_protection_decorator(True)
+enable_ki_protection = _ki_protection_decorator(True)  # type: Callable[[F], F]
 enable_ki_protection.__name__ = "enable_ki_protection"
 
-disable_ki_protection = _ki_protection_decorator(False)
+disable_ki_protection = _ki_protection_decorator(
+    False
+)  # type: Callable[[F], F]
 disable_ki_protection.__name__ = "disable_ki_protection"
 
 

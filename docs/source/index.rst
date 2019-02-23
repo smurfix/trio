@@ -45,7 +45,7 @@ chance to give feedback about any compatibility-breaking changes.
 
 Vital statistics:
 
-* Supported environments: Linux, MacOS, or Windows running some kind of Python
+* Supported environments: Linux, macOS, or Windows running some kind of Python
   3.5-or-better (either CPython or PyPy3 is fine). \*BSD and
   illumos likely work too, but are untested.
 
@@ -57,6 +57,8 @@ Vital statistics:
 * Bug tracker and source code: https://github.com/python-trio/trio
 
 * Real-time chat: https://gitter.im/python-trio/general
+
+* Discussion forum: https://trio.discourse.group
 
 * License: MIT or Apache 2, your choice
 
@@ -80,6 +82,7 @@ Vital statistics:
    design.rst
    history.rst
    contributing.rst
+   releasing.rst
    code-of-conduct.rst
 
 ====================

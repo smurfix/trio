@@ -4,7 +4,7 @@ import os
 import signal
 import sys
 import pathlib
-from functools import wraps
+from functools import wraps, update_wrapper
 import typing as t
 
 import async_generator
@@ -22,6 +22,7 @@ __all__ = [
     "ConflictDetector",
     "fixup_module_metadata",
     "fspath",
+    "generic_function",
 ]
 
 # Equivalent to the C function raise(), which Python doesn't wrap
@@ -74,113 +75,18 @@ else:
 
 
 # Decorator to handle the change to __aiter__ in 3.5.2
-def aiter_compat(aiter_impl):
-    if sys.version_info < (3, 5, 2):
+if sys.version_info < (3, 5, 2):
 
+    def aiter_compat(aiter_impl):
         @wraps(aiter_impl)
         async def __aiter__(*args, **kwargs):
             return aiter_impl(*args, **kwargs)
 
         return __aiter__
-    else:
+else:
+
+    def aiter_compat(aiter_impl):
         return aiter_impl
-
-
-# Very much derived from the one in contextlib, by copy/pasting and then
-# asyncifying everything. (Also I dropped the obscure support for using
-# context managers as function decorators. It could be re-added; I just
-# couldn't be bothered.)
-# So this is a derivative work licensed under the PSF License, which requires
-# the following notice:
-#
-# Copyright © 2001-2017 Python Software Foundation; All Rights Reserved
-class _AsyncGeneratorContextManager:
-    def __init__(self, func, args, kwds):
-        self._func_name = func.__name__
-        self._agen = func(*args, **kwds).__aiter__()
-
-    async def __aenter__(self):
-        if sys.version_info < (3, 5, 2):
-            self._agen = await self._agen
-        try:
-            return await self._agen.asend(None)
-        except StopAsyncIteration:
-            raise RuntimeError("async generator didn't yield") from None
-
-    async def __aexit__(self, type, value, traceback):
-        if type is None:
-            try:
-                await self._agen.asend(None)
-            except StopAsyncIteration:
-                return False
-            else:
-                raise RuntimeError("async generator didn't stop")
-        else:
-            # It used to be possible to have type != None, value == None:
-            #    https://bugs.python.org/issue1705170
-            # but AFAICT this can't happen anymore.
-            assert value is not None
-            try:
-                await self._agen.athrow(type, value, traceback)
-                raise RuntimeError(
-                    "async generator didn't stop after athrow()"
-                )
-            except StopAsyncIteration as exc:
-                # Suppress StopIteration *unless* it's the same exception that
-                # was passed to throw().  This prevents a StopIteration
-                # raised inside the "with" statement from being suppressed.
-                return (exc is not value)
-            except RuntimeError as exc:
-                # Don't re-raise the passed in exception. (issue27112)
-                if exc is value:
-                    return False
-                # Likewise, avoid suppressing if a StopIteration exception
-                # was passed to throw() and later wrapped into a RuntimeError
-                # (see PEP 479).
-                if (
-                    isinstance(value,
-                               (StopIteration, StopAsyncIteration))
-                    and exc.__cause__ is value
-                ):
-                    return False
-                raise
-            except:
-                # only re-raise if it's *not* the exception that was
-                # passed to throw(), because __exit__() must not raise
-                # an exception unless __exit__() itself failed.  But throw()
-                # has to raise the exception to signal propagation, so this
-                # fixes the impedance mismatch between the throw() protocol
-                # and the __exit__() protocol.
-                #
-                if sys.exc_info()[1] is value:
-                    return False
-                raise
-
-    def __enter__(self):
-        raise RuntimeError(
-            "use 'async with {func_name}(...)', not 'with {func_name}(...)'".
-            format(func_name=self._func_name)
-        )
-
-    def __exit__(self):  # pragma: no cover
-        assert False, """Never called, but should be defined"""
-
-
-def acontextmanager(func):
-    """Like @contextmanager, but async."""
-    if not async_generator.isasyncgenfunction(func):
-        raise TypeError(
-            "must be an async generator (native or from async_generator; "
-            "if using @async_generator then @acontextmanager must be on top."
-        )
-
-    @wraps(func)
-    def helper(*args, **kwds):
-        return _AsyncGeneratorContextManager(func, args, kwds)
-
-    # A hint for sphinxcontrib-trio:
-    helper.__returns_acontextmanager__ = True
-    return helper
 
 
 # See: #461 as to why this is needed.
@@ -207,7 +113,7 @@ class _ConflictDetectorSync:
 
     def __enter__(self):
         if self._held:
-            raise _core.ResourceBusyError(self._msg)
+            raise _core.BusyResourceError(self._msg)
         else:
             self._held = True
 
@@ -266,7 +172,15 @@ def async_wraps(cls, wrapped_cls, attr_name):
 
 
 def fixup_module_metadata(module_name, namespace):
+    seen_ids = set()
+
     def fix_one(obj):
+        # avoid infinite recursion (relevant when using
+        # typing.Generic, for example)
+        if id(obj) in seen_ids:
+            return
+        seen_ids.add(id(obj))
+
         mod = getattr(obj, "__module__", None)
         if mod is not None and mod.startswith("trio."):
             obj.__module__ = module_name
@@ -274,9 +188,9 @@ def fixup_module_metadata(module_name, namespace):
                 for attr_value in obj.__dict__.values():
                     fix_one(attr_value)
 
-    for objname in namespace["__all__"]:
-        obj = namespace[objname]
-        fix_one(obj)
+    for objname, obj in namespace.items():
+        if not objname.startswith("_"):  # ignore private attributes
+            fix_one(obj)
 
 
 # os.fspath is defined on Python 3.6+ but we need to support Python 3.5 too
@@ -336,4 +250,32 @@ def fspath(path) -> t.Union[str, bytes]:
 
 
 if hasattr(os, "fspath"):
-    fspath = os.fspath
+    fspath = os.fspath  # noqa
+
+
+class generic_function:
+    """Decorator that makes a function indexable, to communicate
+    non-inferrable generic type parameters to a static type checker.
+
+    If you write::
+
+        @generic_function
+        def open_memory_channel(max_buffer_size: int) -> Tuple[
+            SendChannel[T], ReceiveChannel[T]
+        ]: ...
+
+    it is valid at runtime to say ``open_memory_channel[bytes](5)``.
+    This behaves identically to ``open_memory_channel(5)`` at runtime,
+    and currently won't type-check without a mypy plugin or clever stubs,
+    but at least it becomes possible to write those.
+    """
+
+    def __init__(self, fn):
+        update_wrapper(self, fn)
+        self._fn = fn
+
+    def __call__(self, *args, **kwargs):
+        return self._fn(*args, **kwargs)
+
+    def __getitem__(self, _):
+        return self

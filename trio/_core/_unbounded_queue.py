@@ -3,6 +3,7 @@ import attr
 
 from .. import _core
 from .._util import aiter_compat
+from .._deprecate import deprecated
 
 __all__ = ["UnboundedQueue"]
 
@@ -24,7 +25,7 @@ class UnboundedQueue:
     "batches". If a consumer task processes each batch without yielding, then
     this helps achieve (but does not guarantee) an effective bound on the
     queue's memory use, at the cost of potentially increasing system latencies
-    in general. You should generally prefer to use a :class:`trio.Queue`
+    in general. You should generally prefer to use a memory channel
     instead if you can.
 
     Currently each batch completely empties the queue, but `this may change in
@@ -43,6 +44,12 @@ class UnboundedQueue:
 
     """
 
+    @deprecated(
+        "0.9.0",
+        issue=497,
+        thing="trio.hazmat.UnboundedQueue",
+        instead="trio.open_memory_channel(math.inf)"
+    )
     def __init__(self):
         self._lot = _core.ParkingLot()
         self._data = []

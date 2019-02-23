@@ -30,7 +30,8 @@ The resulting design is radically simpler than older competitors like
 `Twisted <https://twistedmatrix.com/>`__, yet just as capable. Trio is
 the Python I/O library I always wanted; I find it makes building
 I/O-oriented programs easier, less error-prone, and just plain more
-fun. Perhaps you'll find the same.
+fun. `Perhaps you'll find the same
+<https://github.com/python-trio/trio/wiki/Testimonials>`__.
 
 This project is young and still somewhat experimental: the overall
 design is solid and the existing features are fully tested and
@@ -42,7 +43,7 @@ chance to give feedback about any compatibility-breaking changes.
 
 Vital statistics:
 
-* Supported environments: Linux, MacOS, or Windows running some kind of Python
+* Supported environments: Linux, macOS, or Windows running some kind of Python
   3.5-or-better (either CPython or PyPy3 is fine). \\*BSD and illumos likely
   work too, but are not tested.
 
@@ -52,6 +53,10 @@ Vital statistics:
 * Tutorial and reference manual: https://trio.readthedocs.io
 
 * Bug tracker and source code: https://github.com/python-trio/trio
+
+* Real-time chat: https://gitter.im/python-trio/general
+
+* Discussion forum: https://trio.discourse.group
 
 * License: MIT or Apache 2, your choice
 
@@ -74,10 +79,12 @@ setup(
     license="MIT -or- Apache License 2.0",
     packages=find_packages(exclude=["trio.tests"]),
     install_requires=[
-        "attrs",
+        "attrs >= 18.2.0",  # for kw_only
         "sortedcontainers",
         "async_generator >= 1.9",
         "idna",
+        "outcome",
+        "sniffio",
         # PEP 508 style, but:
         # https://bitbucket.org/pypa/wheel/issues/181/bdist_wheel-silently-discards-pep-508
         #"cffi; os_name == 'nt'",  # "cffi is required on windows"

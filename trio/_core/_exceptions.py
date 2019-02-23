@@ -1,14 +1,5 @@
 import attr
 
-# Re-exported
-__all__ = [
-    "TrioInternalError",
-    "RunFinishedError",
-    "WouldBlock",
-    "Cancelled",
-    "ResourceBusyError",
-]
-
 
 class TrioInternalError(Exception):
     """Raised by :func:`run` if we encounter a bug in trio, or (possibly) a
@@ -55,6 +46,10 @@ class Cancelled(BaseException):
 
     then this *won't* catch a :exc:`Cancelled` exception.
 
+    You cannot raise :exc:`Cancelled` yourself. Attempting to do so
+    will produce a :exc:`RuntimeError`. Use :meth:`cancel_scope.cancel()
+    <trio.CancelScope.cancel>` instead.
+
     .. note::
 
        In the US it's also common to see this word spelled "canceled", with
@@ -68,15 +63,69 @@ class Cancelled(BaseException):
        everywhere.
 
     """
-    _scope = None
+    __marker = object()
+
+    def __init__(self, _marker=None):
+        if _marker is not self.__marker:
+            raise RuntimeError(
+                'Cancelled should not be raised directly. Use the cancel() '
+                'method on your cancel scope.'
+            )
+        super().__init__()
+
+    @classmethod
+    def _init(cls):
+        """A private constructor so that a user-created instance of Cancelled
+        can raise an appropriate error. see `issue #342
+        <https://github.com/python-trio/trio/issues/342>`__.
+        """
+        return cls(_marker=cls.__marker)
 
 
-class ResourceBusyError(Exception):
+class BusyResourceError(Exception):
     """Raised when a task attempts to use a resource that some other task is
     already using, and this would lead to bugs and nonsense.
 
     For example, if two tasks try to send data through the same socket at the
-    same time, trio will raise :class:`ResourceBusyError` instead of letting
+    same time, trio will raise :class:`BusyResourceError` instead of letting
     the data get scrambled.
+
+    """
+
+
+class ClosedResourceError(Exception):
+    """Raised when attempting to use a resource after it has been closed.
+
+    Note that "closed" here means that *your* code closed the resource,
+    generally by calling a method with a name like ``close`` or ``aclose``, or
+    by exiting a context manager. If a problem arises elsewhere – for example,
+    because of a network failure, or because a remote peer closed their end of
+    a connection – then that should be indicated by a different exception
+    class, like :exc:`BrokenResourceError` or an :exc:`OSError` subclass.
+
+    """
+
+
+class BrokenResourceError(Exception):
+    """Raised when an attempt to use a resource fails due to external
+    circumstances.
+
+    For example, you might get this if you try to send data on a stream where
+    the remote side has already closed the connection.
+
+    You *don't* get this error if *you* closed the resource – in that case you
+    get :class:`ClosedResourceError`.
+
+    This exception's ``__cause__`` attribute will often contain more
+    information about the underlying error.
+
+    """
+
+
+class EndOfChannel(Exception):
+    """Raised when trying to receive from a :class:`trio.abc.ReceiveChannel`
+    that has no more data to receive.
+
+    This is analogous to an "end-of-file" condition, but for channels.
 
     """

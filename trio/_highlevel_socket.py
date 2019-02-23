@@ -5,12 +5,8 @@ from contextlib import contextmanager
 
 from . import _core
 from . import socket as tsocket
-from ._socket import real_socket_type
 from ._util import ConflictDetector
 from .abc import HalfCloseableStream, Listener
-from ._highlevel_generic import (
-    ClosedStreamError, BrokenStreamError, ClosedListenerError
-)
 
 __all__ = ["SocketStream", "SocketListener"]
 
@@ -28,9 +24,11 @@ def _translate_socket_errors_to_stream_errors():
         yield
     except OSError as exc:
         if exc.errno in _closed_stream_errnos:
-            raise ClosedStreamError("this socket was already closed") from None
+            raise _core.ClosedResourceError(
+                "this socket was already closed"
+            ) from None
         else:
-            raise BrokenStreamError(
+            raise _core.BrokenResourceError(
                 "socket connection broken: {}".format(exc)
             ) from exc
 
@@ -62,13 +60,8 @@ class SocketStream(HalfCloseableStream):
     def __init__(self, socket):
         if not isinstance(socket, tsocket.SocketType):
             raise TypeError("SocketStream requires trio socket object")
-        if real_socket_type(socket.type) != tsocket.SOCK_STREAM:
+        if socket.type != tsocket.SOCK_STREAM:
             raise ValueError("SocketStream requires a SOCK_STREAM socket")
-        try:
-            socket.getpeername()
-        except OSError:
-            err = ValueError("SocketStream requires a connected socket")
-            raise err from None
 
         self.socket = socket
         self._send_conflict_detector = ConflictDetector(
@@ -103,12 +96,18 @@ class SocketStream(HalfCloseableStream):
     async def send_all(self, data):
         if self.socket.did_shutdown_SHUT_WR:
             await _core.checkpoint()
-            raise ClosedStreamError("can't send data after sending EOF")
+            raise _core.ClosedResourceError(
+                "can't send data after sending EOF"
+            )
         with self._send_conflict_detector.sync:
             with _translate_socket_errors_to_stream_errors():
                 with memoryview(data) as data:
                     if not data:
                         await _core.checkpoint()
+                        if self.socket.fileno() == -1:
+                            raise _core.ClosedResourceError(
+                                "socket was already closed"
+                            )
                         return
                     total_sent = 0
                     while total_sent < len(data):
@@ -119,13 +118,13 @@ class SocketStream(HalfCloseableStream):
     async def wait_send_all_might_not_block(self):
         async with self._send_conflict_detector:
             if self.socket.fileno() == -1:
-                raise ClosedStreamError
+                raise _core.ClosedResourceError
             with _translate_socket_errors_to_stream_errors():
                 await self.socket.wait_writable()
 
     async def send_eof(self):
         async with self._send_conflict_detector:
-            # On MacOS, calling shutdown a second time raises ENOTCONN, but
+            # On macOS, calling shutdown a second time raises ENOTCONN, but
             # send_eof needs to be idempotent.
             if self.socket.did_shutdown_SHUT_WR:
                 return
@@ -179,7 +178,7 @@ class SocketStream(HalfCloseableStream):
 # -----------------
 #
 # Here's a list of all the possible errors that accept() can return, according
-# to the POSIX spec or the Linux, FreeBSD, MacOS, and Windows docs:
+# to the POSIX spec or the Linux, FreeBSD, macOS, and Windows docs:
 #
 # Can't happen with a trio socket:
 # - EAGAIN/(WSA)EWOULDBLOCK
@@ -225,7 +224,7 @@ class SocketStream(HalfCloseableStream):
 # - ignores EPERM, with comment about Linux firewalls
 # - logs and ignores EMFILE, ENOBUFS, ENFILE, ENOMEM, ECONNABORTED
 #   Comment notes that ECONNABORTED is a BSDism and that Linux returns the
-#   socket before having it fail, and MacOS just silently discards it.
+#   socket before having it fail, and macOS just silently discards it.
 # - other errors are raised, which is logged + kills the socket
 # ref: src/twisted/internet/tcp.py, Port.doRead
 #
@@ -319,7 +318,7 @@ for name in _ignorable_accept_errno_names:
         pass
 
 
-class SocketListener(Listener):
+class SocketListener(Listener[SocketStream]):
     """A :class:`~trio.abc.Listener` that uses a listening socket to accept
     incoming connections as :class:`SocketStream` objects.
 
@@ -339,14 +338,14 @@ class SocketListener(Listener):
     def __init__(self, socket):
         if not isinstance(socket, tsocket.SocketType):
             raise TypeError("SocketListener requires trio socket object")
-        if real_socket_type(socket.type) != tsocket.SOCK_STREAM:
+        if socket.type != tsocket.SOCK_STREAM:
             raise ValueError("SocketListener requires a SOCK_STREAM socket")
         try:
             listening = socket.getsockopt(
                 tsocket.SOL_SOCKET, tsocket.SO_ACCEPTCONN
             )
         except OSError:
-            # SO_ACCEPTCONN fails on MacOS; we just have to trust the user.
+            # SO_ACCEPTCONN fails on macOS; we just have to trust the user.
             pass
         else:
             if not listening:
@@ -363,7 +362,7 @@ class SocketListener(Listener):
         Raises:
           OSError: if the underlying call to ``accept`` raises an unexpected
               error.
-          ClosedListenerError: if you already closed the socket.
+          ClosedResourceError: if you already closed the socket.
 
         This method handles routine errors like ``ECONNABORTED``, but passes
         other errors on to its caller. In particular, it does *not* make any
@@ -376,7 +375,7 @@ class SocketListener(Listener):
                 sock, _ = await self.socket.accept()
             except OSError as exc:
                 if exc.errno in _closed_stream_errnos:
-                    raise ClosedListenerError
+                    raise _core.ClosedResourceError
                 if exc.errno not in _ignorable_accept_errnos:
                     raise
             else:

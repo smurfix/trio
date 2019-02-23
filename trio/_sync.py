@@ -1,7 +1,9 @@
 import operator
-from collections import deque
+from collections import deque, OrderedDict
+import math
 
 import attr
+import outcome
 
 from . import _core
 from ._util import aiter_compat
@@ -13,7 +15,6 @@ __all__ = [
     "Lock",
     "StrictFIFOLock",
     "Condition",
-    "Queue",
 ]
 
 
@@ -22,8 +23,18 @@ class Event:
     """A waitable boolean value useful for inter-task synchronization,
     inspired by :class:`threading.Event`.
 
-    An event object manages an internal boolean flag, which is initially
-    False, and tasks can wait for it to become True.
+    An event object has an internal boolean flag, representing whether
+    the event has happened yet. The flag is initially False, and the
+    :meth:`wait` method waits until the flag is True. If the flag is
+    already True, then :meth:`wait` returns immediately. (If the event has
+    already happened, there's nothing to wait for.) The :meth:`set` method
+    sets the flag to True, and wakes up any waiters.
+
+    This behavior is useful because it helps avoid race conditions and
+    lost wakeups: it doesn't matter whether :meth:`set` gets called just
+    before or after :meth:`wait`. If you want a lower-level wakeup
+    primitive that doesn't have this protection, consider :class:`Condition`
+    or :class:`trio.hazmat.ParkingLot`.
 
     """
 
@@ -53,8 +64,7 @@ class Event:
     async def wait(self):
         """Block until the internal flag value becomes True.
 
-        If it's already True, then this method is still a checkpoint, but
-        otherwise returns immediately.
+        If it's already True, then this method returns immediately.
 
         """
         if self._flag:
@@ -186,19 +196,21 @@ class CapacityLimiter:
         """
         return self._total_tokens
 
-    def _wake_waiters(self):
-        available = self._total_tokens - len(self._borrowers)
-        for woken in self._lot.unpark(count=available):
-            self._borrowers.add(self._pending_borrowers.pop(woken))
-
     @total_tokens.setter
     def total_tokens(self, new_total_tokens):
-        if not isinstance(new_total_tokens, int):
-            raise TypeError("total_tokens must be an int")
+        if not isinstance(
+            new_total_tokens, int
+        ) and new_total_tokens != math.inf:
+            raise TypeError("total_tokens must be an int or math.inf")
         if new_total_tokens < 1:
             raise ValueError("total_tokens must be >= 1")
         self._total_tokens = new_total_tokens
         self._wake_waiters()
+
+    def _wake_waiters(self):
+        available = self._total_tokens - len(self._borrowers)
+        for woken in self._lot.unpark(count=available):
+            self._borrowers.add(self._pending_borrowers.pop(woken))
 
     @property
     def borrowed_tokens(self):
@@ -287,7 +299,11 @@ class CapacityLimiter:
         except _core.WouldBlock:
             task = _core.current_task()
             self._pending_borrowers[task] = borrower
-            await self._lot.park()
+            try:
+                await self._lot.park()
+            except _core.Cancelled:
+                self._pending_borrowers.pop(task)
+                raise
         except:
             await _core.cancel_shielded_checkpoint()
             raise
@@ -401,8 +417,9 @@ class Semaphore:
         else:
             max_value_str = ", max_value={}".format(self._max_value)
         return (
-            "<trio.Semaphore({}{}) at {:#x}>"
-            .format(self._value, max_value_str, id(self))
+            "<trio.Semaphore({}{}) at {:#x}>".format(
+                self._value, max_value_str, id(self)
+            )
         )
 
     @property
@@ -510,8 +527,9 @@ class Lock:
             s1 = "unlocked"
             s2 = ""
         return (
-            "<{} {} object at {:#x}{}>"
-            .format(s1, self.__class__.__name__, id(self), s2)
+            "<{} {} object at {:#x}{}>".format(
+                s1, self.__class__.__name__, id(self), s2
+            )
         )
 
     def locked(self):
@@ -593,11 +611,11 @@ class Lock:
 
 
 class StrictFIFOLock(Lock):
-    """A variant of :class:`Lock` where tasks are guaranteed to acquire the
+    r"""A variant of :class:`Lock` where tasks are guaranteed to acquire the
     lock in strict first-come-first-served order.
 
     An example of when this is useful is if you're implementing something like
-    :class:`trio.ssl.SSLStream` or an HTTP/2 server using `h2
+    :class:`trio.SSLStream` or an HTTP/2 server using `h2
     <https://hyper-h2.readthedocs.io/>`__, where you have multiple concurrent
     tasks that are interacting with a shared state machine, and at
     unpredictable moments the state machine requests that a chunk of data be
@@ -747,7 +765,7 @@ class Condition:
         try:
             await self._lot.park()
         except:
-            with _core.open_cancel_scope(shield=True):
+            with _core.CancelScope(shield=True):
                 await self.acquire()
             raise
 
@@ -777,7 +795,7 @@ class Condition:
         self._lot.repark_all(self._lock._lot)
 
     def statistics(self):
-        """Return an object containing debugging information.
+        r"""Return an object containing debugging information.
 
         Currently the following fields are defined:
 
@@ -790,170 +808,4 @@ class Condition:
         return _ConditionStatistics(
             tasks_waiting=len(self._lot),
             lock_statistics=self._lock.statistics(),
-        )
-
-
-@attr.s(frozen=True)
-class _QueueStats:
-    qsize = attr.ib()
-    capacity = attr.ib()
-    tasks_waiting_put = attr.ib()
-    tasks_waiting_get = attr.ib()
-
-
-# Like queue.Queue, with the notable difference that the capacity argument is
-# mandatory.
-class Queue:
-    """A bounded queue suitable for inter-task communication.
-
-    This class is generally modelled after :class:`queue.Queue`, but with the
-    major difference that it is always bounded.
-
-    A :class:`Queue` object can be used as an asynchronous iterator that
-    dequeues objects one at a time. That is, these two loops are equivalent::
-
-       async for obj in queue:
-           ...
-
-       while True:
-           obj = await queue.get()
-           ...
-
-    Args:
-      capacity (int): The maximum number of items allowed in the queue before
-          :meth:`put` blocks. Choosing a sensible value here is important to
-          ensure that backpressure is communicated promptly and avoid
-          unnecessary latency. If in doubt, use 1.
-
-    """
-
-    def __init__(self, capacity):
-        if not isinstance(capacity, int):
-            raise TypeError("capacity must be an integer")
-        if capacity < 1:
-            raise ValueError("capacity must be >= 1")
-        # Invariants:
-        #   get_semaphore.value() == len(self._data)
-        #   put_semaphore.value() + get_semaphore.value() = capacity
-        self.capacity = operator.index(capacity)
-        self._put_semaphore = Semaphore(capacity, max_value=capacity)
-        self._get_semaphore = Semaphore(0, max_value=capacity)
-        self._data = deque()
-
-    def __repr__(self):
-        return (
-            "<Queue({}) at {:#x} holding {} items>"
-            .format(self.capacity, id(self), len(self._data))
-        )
-
-    def qsize(self):
-        """Returns the number of items currently in the queue.
-
-        There is some subtlety to interpreting this method's return value: see
-        `issue #63 <https://github.com/python-trio/trio/issues/63>`__.
-
-        """
-        return len(self._data)
-
-    def full(self):
-        """Returns True if the queue is at capacity, False otherwise.
-
-        There is some subtlety to interpreting this method's return value: see
-        `issue #63 <https://github.com/python-trio/trio/issues/63>`__.
-
-        """
-        return len(self._data) == self.capacity
-
-    def empty(self):
-        """Returns True if the queue is empty, False otherwise.
-
-        There is some subtlety to interpreting this method's return value: see
-        `issue #63 <https://github.com/python-trio/trio/issues/63>`__.
-
-        """
-        return not self._data
-
-    def _put_protected(self, obj):
-        self._data.append(obj)
-        self._get_semaphore.release()
-
-    @_core.enable_ki_protection
-    def put_nowait(self, obj):
-        """Attempt to put an object into the queue, without blocking.
-
-        Args:
-          obj (object): The object to enqueue.
-
-        Raises:
-          WouldBlock: if the queue is full.
-
-        """
-        self._put_semaphore.acquire_nowait()
-        self._put_protected(obj)
-
-    @_core.enable_ki_protection
-    async def put(self, obj):
-        """Put an object into the queue, blocking if necessary.
-
-        Args:
-          obj (object): The object to enqueue.
-
-        """
-        await self._put_semaphore.acquire()
-        self._put_protected(obj)
-
-    def _get_protected(self):
-        self._put_semaphore.release()
-        return self._data.popleft()
-
-    @_core.enable_ki_protection
-    def get_nowait(self):
-        """Attempt to get an object from the queue, without blocking.
-
-        Returns:
-          object: The dequeued object.
-
-        Raises:
-          WouldBlock: if the queue is empty.
-
-        """
-        self._get_semaphore.acquire_nowait()
-        return self._get_protected()
-
-    @_core.enable_ki_protection
-    async def get(self):
-        """Get an object from the queue, blocking if necessary.
-
-        Returns:
-          object: The dequeued object.
-
-        """
-        await self._get_semaphore.acquire()
-        return self._get_protected()
-
-    @aiter_compat
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        return await self.get()
-
-    def statistics(self):
-        """Returns an object containing debugging information.
-
-        Currently the following fields are defined:
-
-        * ``qsize``: The number of items currently in the queue.
-        * ``capacity``: The maximum number of items the queue can hold.
-        * ``tasks_waiting_put``: The number of tasks blocked on this queue's
-          :meth:`put` method.
-        * ``tasks_waiting_get``: The number of tasks blocked on this queue's
-          :meth:`get` method.
-
-        """
-        return _QueueStats(
-            qsize=len(self._data),
-            capacity=self.capacity,
-            tasks_waiting_put=self._put_semaphore.statistics().tasks_waiting,
-            tasks_waiting_get=self._get_semaphore.statistics().tasks_waiting,
         )

@@ -3,14 +3,6 @@ import attr
 from . import _core
 from .abc import HalfCloseableStream
 
-__all__ = [
-    "aclose_forcefully",
-    "BrokenStreamError",
-    "ClosedStreamError",
-    "ClosedListenerError",
-    "StapledStream",
-]
-
 
 async def aclose_forcefully(resource):
     """Close an async resource or async generator immediately, without
@@ -25,9 +17,9 @@ async def aclose_forcefully(resource):
     cancelling it immediately.
 
     Most users won't need this, but it may be useful on cleanup paths where
-    you can't afford to block, or if you want to close an resource and don't
+    you can't afford to block, or if you want to close a resource and don't
     care about handling it gracefully. For example, if
-    :class:`~trio.ssl.SSLStream` encounters an error and cannot perform its
+    :class:`~trio.SSLStream` encounters an error and cannot perform its
     own graceful close, then there's no point in waiting to gracefully shut
     down the underlying transport either, so it calls ``await
     aclose_forcefully(self.transport_stream)``.
@@ -37,56 +29,9 @@ async def aclose_forcefully(resource):
     assuming the underlying resource object is correctly implemented).
 
     """
-    with _core.open_cancel_scope() as cs:
+    with _core.CancelScope() as cs:
         cs.cancel()
         await resource.aclose()
-
-
-class BrokenStreamError(Exception):
-    """Raised when an attempt to use a stream a stream fails due to external
-    circumstances.
-
-    For example, you might get this if you try to send data on a stream where
-    the remote side has already closed the connection.
-
-    You *don't* get this error if *you* closed the stream – in that case you
-    get :class:`ClosedStreamError`.
-
-    This exception's ``__cause__`` attribute will often contain more
-    information about the underlying error.
-
-    """
-    pass
-
-
-class ClosedStreamError(Exception):
-    """Raised when an attempt to use a stream fails because the stream was
-    already closed locally.
-
-    You *only* get this error if *your* code closed the stream object you're
-    attempting to use by calling
-    :meth:`~trio.abc.AsyncResource.aclose` or
-    similar. (:meth:`~trio.abc.SendStream.send_all` might also raise this if
-    you already called :meth:`~trio.abc.HalfCloseableStream.send_eof`.)
-    Therefore this exception generally indicates a bug in your code.
-
-    If a problem arises elsewhere, for example due to a network failure or a
-    misbehaving peer, then you get :class:`BrokenStreamError` instead.
-
-    """
-    pass
-
-
-class ClosedListenerError(Exception):
-    """Raised when an attempt to use a listener fails because it was already
-    closed locally.
-
-    You *only* get this error if *your* code closed the stream object you're
-    attempting to use by calling :meth:`~trio.abc.AsyncResource.aclose` or
-    similar. Therefore this exception generally indicates a bug in your code.
-
-    """
-    pass
 
 
 @attr.s(cmp=False, hash=False)

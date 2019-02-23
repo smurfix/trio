@@ -1,4 +1,6 @@
 import select
+
+import outcome
 from contextlib import contextmanager
 import attr
 
@@ -56,7 +58,7 @@ class KqueueIOManager:
             if event.flags & select.KQ_EV_ONESHOT:
                 del self._registered[key]
             if type(receiver) is _core.Task:
-                _core.reschedule(receiver, _core.Value(event))
+                _core.reschedule(receiver, outcome.Value(event))
             else:
                 receiver.put_nowait(event)
 
@@ -80,7 +82,7 @@ class KqueueIOManager:
     def monitor_kevent(self, ident, filter):
         key = (ident, filter)
         if key in self._registered:
-            raise _core.ResourceBusyError(
+            raise _core.BusyResourceError(
                 "attempt to register multiple listeners for same "
                 "ident/filter pair"
             )
@@ -96,7 +98,7 @@ class KqueueIOManager:
         key = (ident, filter)
         if key in self._registered:
             await _core.checkpoint()
-            raise _core.ResourceBusyError(
+            raise _core.BusyResourceError(
                 "attempt to register multiple listeners for same "
                 "ident/filter pair"
             )
@@ -131,3 +133,28 @@ class KqueueIOManager:
     @_public
     async def wait_writable(self, fd):
         await self._wait_common(fd, select.KQ_FILTER_WRITE)
+
+    @_public
+    def notify_fd_close(self, fd):
+        if not isinstance(fd, int):
+            fd = fd.fileno()
+
+        for filter in [select.KQ_FILTER_READ, select.KQ_FILTER_WRITE]:
+            key = (fd, filter)
+            receiver = self._registered.get(key)
+
+            if receiver is None:
+                continue
+
+            if type(receiver) is _core.Task:
+                event = select.kevent(fd, filter, select.KQ_EV_DELETE)
+                self._kqueue.control([event], 0)
+                exc = _core.ClosedResourceError("another task closed this fd")
+                _core.reschedule(receiver, outcome.Error(exc))
+                del self._registered[key]
+            else:
+                # XX this is an interesting example of a case where being able
+                # to close a queue would be useful...
+                raise NotImplementedError(
+                    "can't close an fd that monitor_kevent is using"
+                )

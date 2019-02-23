@@ -8,7 +8,6 @@ from .. import _core
 from ..testing import (
     check_half_closeable_stream, wait_all_tasks_blocked, assert_checkpoints
 )
-from .._highlevel_generic import ClosedListenerError
 from .._highlevel_socket import *
 from .. import socket as tsocket
 
@@ -22,11 +21,6 @@ async def test_SocketStream_basics():
 
     # DGRAM socket bad
     with tsocket.socket(type=tsocket.SOCK_DGRAM) as sock:
-        with pytest.raises(ValueError):
-            SocketStream(sock)
-
-    # disconnected socket bad
-    with tsocket.socket() as sock:
         with pytest.raises(ValueError):
             SocketStream(sock)
 
@@ -155,7 +149,7 @@ async def test_SocketListener():
         excinfo.match(r".*SOCK_STREAM")
 
     # Didn't call .listen()
-    # MacOS has no way to check for this, so skip testing it there.
+    # macOS has no way to check for this, so skip testing it there.
     if sys.platform != "darwin":
         with tsocket.socket() as s:
             await s.bind(("127.0.0.1", 0))
@@ -185,7 +179,7 @@ async def test_SocketListener():
         await listener.aclose()
 
     with assert_checkpoints():
-        with pytest.raises(ClosedListenerError):
+        with pytest.raises(_core.ClosedResourceError):
             await listener.accept()
 
     client_sock.close()
@@ -203,7 +197,7 @@ async def test_SocketListener_socket_closed_underfoot():
 
     # SocketListener gives correct error
     with assert_checkpoints():
-        with pytest.raises(ClosedListenerError):
+        with pytest.raises(_core.ClosedResourceError):
             await listener.accept()
 
 
@@ -219,10 +213,6 @@ async def test_SocketListener_accept_errors():
             return True
 
         def setsockopt(self, level, opt, value):
-            pass
-
-        # Fool the check for connection in SocketStream.__init__
-        def getpeername(self):
             pass
 
         async def accept(self):
@@ -263,3 +253,12 @@ async def test_SocketListener_accept_errors():
     with assert_checkpoints():
         s = await l.accept()
         assert s.socket is fake_server_sock
+
+
+async def test_socket_stream_works_when_peer_has_already_closed():
+    sock_a, sock_b = tsocket.socketpair()
+    await sock_b.send(b"x")
+    sock_b.close()
+    stream = SocketStream(sock_a)
+    assert await stream.receive_some(1) == b"x"
+    assert await stream.receive_some(1) == b""

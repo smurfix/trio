@@ -1,5 +1,6 @@
 import select
 import attr
+import outcome
 
 from .. import _core
 from . import _public
@@ -28,7 +29,8 @@ class EpollWaiters:
         # XX not sure if EPOLLEXCLUSIVE is actually safe... I think
         # probably we should use it here unconditionally, but:
         # https://stackoverflow.com/questions/41582560/how-does-epolls-epollexclusive-mode-interact-with-level-triggering
-        #flags |= select.EPOLLEXCLUSIVE
+
+        # flags |= select.EPOLLEXCLUSIVE
         # We used to use ONESHOT here also, but it turns out that it's
         # confusing/complicated: you can't use ONESHOT+EPOLLEXCLUSIVE
         # together, you ONESHOT doesn't delete the registration but just
@@ -102,7 +104,7 @@ class EpollIOManager:
         waiters = self._registered[fd]
         if getattr(waiters, attr_name) is not None:
             await _core.checkpoint()
-            raise _core.ResourceBusyError(
+            raise _core.BusyResourceError(
                 "another task is already reading / writing this fd"
             )
         setattr(waiters, attr_name, _core.current_task())
@@ -122,3 +124,26 @@ class EpollIOManager:
     @_public
     async def wait_writable(self, fd):
         await self._epoll_wait(fd, "write_task")
+
+    @_public
+    def notify_fd_close(self, fd):
+        if not isinstance(fd, int):
+            fd = fd.fileno()
+        if fd not in self._registered:
+            return
+
+        waiters = self._registered[fd]
+
+        def interrupt(task):
+            exc = _core.ClosedResourceError("another task closed this fd")
+            _core.reschedule(task, outcome.Error(exc))
+
+        if waiters.write_task is not None:
+            interrupt(waiters.write_task)
+            waiters.write_task = None
+
+        if waiters.read_task is not None:
+            interrupt(waiters.read_task)
+            waiters.read_task = None
+
+        self._update_registrations(fd, True)

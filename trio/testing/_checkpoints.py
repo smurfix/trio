@@ -1,7 +1,6 @@
 from contextlib import contextmanager
 
 from .. import _core
-from .._deprecate import deprecated
 
 __all__ = ["assert_checkpoints", "assert_no_checkpoints"]
 
@@ -61,9 +60,9 @@ def assert_no_checkpoints():
       Synchronous code never contains any checkpoints, but we can double-check
       that::
 
-         queue = trio.Queue(10)
+         send_channel, receive_channel = trio.open_memory_channel(10)
          with trio.testing.assert_no_checkpoints():
-             queue.put_nowait(None)
+             send_channel.send_nowait(None)
 
     """
     __tracebackhide__ = True

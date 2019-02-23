@@ -155,7 +155,7 @@ kind of issue looks like in real life, consider this function::
         data = bytearray()
         while nbytes > 0:
             # recv() reads up to 'nbytes' bytes each time
-            chunk += await sock.recv(nbytes)
+            chunk = await sock.recv(nbytes)
             if not chunk:
                 raise RuntimeError("socket unexpected closed")
             nbytes -= len(chunk)
@@ -206,9 +206,9 @@ You should not assume that trio's internal clock matches any other
 clock you have access to, including the clocks of simultaneous calls
 to :func:`trio.run` happening in other processes or threads!
 
-The default clock is currently implemented as :func:`time.monotonic`
+The default clock is currently implemented as :func:`time.perf_counter`
 plus a large random offset. The idea here is to catch code that
-accidentally uses :func:`time.monotonic` early, which should help keep
+accidentally uses :func:`time.perf_counter` early, which should help keep
 our options open for `changing the clock implementation later
 <https://github.com/python-trio/trio/issues/33>`__, and (more importantly)
 make sure you can be confident that custom clocks like
@@ -380,7 +380,7 @@ whether this scope caught a :exc:`Cancelled` exception::
 The ``cancel_scope`` object also allows you to check or adjust this
 scope's deadline, explicitly trigger a cancellation without waiting
 for the deadline, check if the scope has already been cancelled, and
-so forth – see :func:`open_cancel_scope` below for the full details.
+so forth – see :class:`CancelScope` below for the full details.
 
 .. _blocking-cleanup-example:
 
@@ -415,7 +415,7 @@ Of course, if you really want to make another blocking call in your
 cleanup handler, trio will let you; it's trying to prevent you from
 accidentally shooting yourself in the foot. Intentional foot-shooting
 is no problem (or at least – it's not trio's problem). To do this,
-create a new scope, and set its :attr:`~The cancel scope interface.shield`
+create a new scope, and set its :attr:`~CancelScope.shield`
 attribute to :data:`True`::
 
    with trio.move_on_after(TIMEOUT):
@@ -463,7 +463,7 @@ above). Cancellable means:
   happen*. If a trio socket's ``send`` method raises :exc:`Cancelled`,
   then no data was sent. If a trio socket's ``recv`` method raises
   :exc:`Cancelled` then no data was lost – it's still sitting in the
-  socket recieve buffer waiting for you to call ``recv`` again. And so
+  socket receive buffer waiting for you to call ``recv`` again. And so
   forth.
 
 There are a few idiosyncratic cases where external constraints make it
@@ -494,67 +494,17 @@ but *will* still close the underlying socket before raising
 Cancellation API details
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-The primitive operation for creating a new cancellation scope is:
+:func:`move_on_after` and all the other cancellation facilities provided
+by Trio are ultimately implemented in terms of :class:`CancelScope`
+objects.
 
-.. autofunction:: open_cancel_scope
-   :with: cancel_scope
+.. autoclass:: trio.CancelScope
 
-Cancel scope objects provide the following interface:
+   .. autoattribute:: deadline
 
-.. interface:: The cancel scope interface
+   .. autoattribute:: shield
 
-   .. attribute:: deadline
-
-      Read-write, :class:`float`. An absolute time on the current
-      run's clock at which this scope will automatically become
-      cancelled. You can adjust the deadline by modifying this
-      attribute, e.g.::
-
-         # I need a little more time!
-         cancel_scope.deadline += 30
-
-      Note that for efficiency, the core run loop only checks for
-      expired deadlines every once in a while. This means that in
-      certain cases there may be a short delay between when the clock
-      says the deadline should have expired, and when checkpoints
-      start raising :exc:`~trio.Cancelled`. This is a very obscure
-      corner case that you're unlikely to notice, but we document it
-      for completeness. (If this *does* cause problems for you, of
-      course, then `we want to know!
-      <https://github.com/python-trio/trio/issues>`__)
-
-      Defaults to :data:`math.inf`, which means "no deadline", though
-      this can be overridden by the ``deadline=`` argument to
-      :func:`~trio.open_cancel_scope`.
-
-   .. attribute:: shield
-
-      Read-write, :class:`bool`, default :data:`False`. So long as
-      this is set to :data:`True`, then the code inside this scope
-      will not receive :exc:`~trio.Cancelled` exceptions from scopes
-      that are outside this scope. They can still receive
-      :exc:`~trio.Cancelled` exceptions from (1) this scope, or (2)
-      scopes inside this scope. You can modify this attribute::
-
-         with trio.open_cancel_scope() as cancel_scope:
-             cancel_scope.shield = True
-             # This cannot be interrupted by any means short of
-             # killing the process:
-             await sleep(10)
-
-             cancel_scope.shield = False
-             # Now this can be cancelled normally:
-             await sleep(10)
-
-      Defaults to :data:`False`, though this can be overridden by the
-      ``shield=`` argument to :func:`~trio.open_cancel_scope`.
-
-   .. method:: cancel()
-
-      Cancels this scope immediately.
-
-      This method is idempotent, i.e. if the scope was already
-      cancelled then this method silently does nothing.
+   .. automethod:: cancel()
 
    .. attribute:: cancelled_caught
 
@@ -564,23 +514,29 @@ Cancel scope objects provide the following interface:
       exception, and (2) this scope is the one that was responsible
       for triggering this :exc:`~trio.Cancelled` exception.
 
+      If the same :class:`CancelScope` is reused for multiple ``with``
+      blocks, the :attr:`cancelled_caught` attribute applies to the
+      most recent ``with`` block. (It is reset to :data:`False` each
+      time a new ``with`` block is entered.)
+
    .. attribute:: cancel_called
 
       Readonly :class:`bool`. Records whether cancellation has been
       requested for this scope, either by an explicit call to
       :meth:`cancel` or by the deadline expiring.
 
-      This attribute being True does *not* necessarily mean that
-      the code within the scope has been, or will be, affected by
-      the cancellation. For example, if :meth:`cancel` was called
-      just before the scope exits, when it's too late to deliver
-      a :exc:`~trio.Cancelled` exception, then this attribute will
-      still be True.
+      This attribute being True does *not* necessarily mean that the
+      code within the scope has been, or will be, affected by the
+      cancellation. For example, if :meth:`cancel` was called after
+      the last checkpoint in the ``with`` block, when it's too late to
+      deliver a :exc:`~trio.Cancelled` exception, then this attribute
+      will still be True.
 
       This attribute is mostly useful for debugging and introspection.
       If you want to know whether or not a chunk of code was actually
       cancelled, then :attr:`cancelled_caught` is usually more
       appropriate.
+
 
 Trio also provides several convenience functions for the common
 situation of just wanting to impose a timeout on some code:
@@ -830,23 +786,23 @@ finishes first::
        if not async_fns:
            raise ValueError("must pass at least one argument")
 
-       q = trio.Queue(1)
+       send_channel, receive_channel = trio.open_memory_channel(0)
 
        async def jockey(async_fn):
-           await q.put(await async_fn())
+           await send_channel.send(await async_fn())
 
        async with trio.open_nursery() as nursery:
            for async_fn in async_fns:
                nursery.start_soon(jockey, async_fn)
-           winner = await q.get()
+           winner = await receive_channel.receive()
            nursery.cancel_scope.cancel()
            return winner
 
 This works by starting a set of tasks which each try to run their
 function, and then report back the value it returns. The main task
-uses ``q.get()`` to wait for one to finish; as soon as the first task
-crosses the finish line, it cancels the rest, and then returns the
-winning value.
+uses ``receive_channel.receive`` to wait for one to finish; as soon as
+the first task crosses the finish line, it cancels the rest, and then
+returns the winning value.
 
 Here if one or more of the racing functions raises an unhandled
 exception then Trio's normal handling kicks in: it cancels the others
@@ -876,12 +832,15 @@ Nursery objects provide the following interface:
       This and :meth:`start` are the two fundamental methods for
       creating concurrent tasks in trio.
 
-      Note that this is a synchronous function: it sets up the new
-      task, but then returns immediately, *before* it has a chance to
-      run. It won't actually run until some later point when you
-      execute a checkpoint and the scheduler decides to run it. If you
-      need to wait for the task to initialize itself before
-      continuing, see :meth:`start`.
+      Note that this is *not* an async function and you don't use await
+      when calling it. It sets up the new task, but then returns
+      immediately, *before* it has a chance to run. The new task won’t
+      actually get a chance to do anything until some later point when
+      you execute a checkpoint and the scheduler decides to run it.
+      If you want to run a function and immediately wait for its result,
+      then you don't need a nursery; just use ``await async_fn(*args)``.
+      If you want to wait for the task to initialize itself before 
+      continuing, see :meth:`start()`.
 
       It's possible to pass a nursery object into another task, which
       allows that task to start new child tasks in the first task's
@@ -1102,7 +1061,7 @@ identifier, and then include this identifier in each log message:
 
 This way we can see that request 1 was slow: it started before request
 2 but finished afterwards. (You can also get `much fancier
-<http://opentracing.io/documentation/>`__, but this is enough for an
+<https://opentracing.io/docs/>`__, but this is enough for an
 example.)
 
 Now, here's the problem: how does the logging code know what the
@@ -1191,11 +1150,11 @@ In trio, we standardize on the following conventions:
   :mod:`threading`.) We like this approach because it allows us to
   make the blocking version async and the non-blocking version sync.
 
-* When a non-blocking method cannot succeed (the queue is empty, the
-  lock is already held, etc.), then it raises
-  :exc:`trio.WouldBlock`. There's no equivalent to the
-  :exc:`queue.Empty` versus :exc:`queue.Full` distinction – we just
-  have the one exception that we use consistently.
+* When a non-blocking method cannot succeed (the channel is empty, the
+  lock is already held, etc.), then it raises :exc:`trio.WouldBlock`.
+  There's no equivalent to the :exc:`queue.Empty` versus
+  :exc:`queue.Full` distinction – we just have the one exception that
+  we use consistently.
 
 
 Fairness
@@ -1210,7 +1169,7 @@ best choice, but for now that's how it works.
 
 As an example of what this means, here's a small program in which two
 tasks compete for a lock. Notice that the task which releases the lock
-always immedately attempts to re-acquire it, before the other task has
+always immediately attempts to re-acquire it, before the other task has
 a chance to run. (And remember that we're doing cooperative
 multi-tasking here, so it's actually *deterministic* that the task
 releasing the lock will call :meth:`~Lock.acquire` before the other
@@ -1245,58 +1204,326 @@ Broadcasting an event with :class:`Event`
    :members:
 
 
-.. _queue:
+.. _channels:
 
-Passing messages with :class:`Queue`
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Using channels to pass values between tasks
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-You can use :class:`Queue` objects to safely pass objects between
-tasks. Trio :class:`Queue` objects always have a bounded size. Here's
-a toy example to demonstrate why this is important. Suppose we have a
-queue with two producers and one consumer::
+*Channels* allow you to safely and conveniently send objects between
+different tasks. They're particularly useful for implementing
+producer/consumer patterns.
 
-   async def producer(queue):
-       while True:
-           await queue.put(1)
+The channel API is defined by the abstract base classes
+:class:`trio.abc.SendChannel` and :class:`trio.abc.ReceiveChannel`.
+You can use these to implement your own custom channels, that do
+things like pass objects between processes or over the network. But in
+many cases, you just want to pass objects between different tasks
+inside a single process, and for that you can use
+:func:`trio.open_memory_channel`:
 
-   async def consumer(queue):
-       while True:
-           print(await queue.get())
+.. autofunction:: open_memory_channel(max_buffer_size)
 
-   async def main():
-       # This example won't work with Trio's actual Queue class, so
-       # imagine we have some sort of platonic ideal of an unbounded
-       # queue here:
-       queue = trio.HypotheticalQueue()
-       async with trio.open_nursery() as nursery:
-           # Two producers
-           nursery.start_soon(producer, queue)
-           nursery.start_soon(producer, queue)
-           # One consumer
-           nursery.start_soon(consumer, queue)
+.. note:: If you've used the :mod:`threading` or :mod:`asyncio`
+   modules, you may be familiar with :class:`queue.Queue` or
+   :class:`asyncio.Queue`. In Trio, :func:`open_memory_channel` is
+   what you use when you're looking for a queue. The main difference
+   is that Trio splits the classic queue interface up into two
+   objects. The advantage of this is that it makes it possible to put
+   the two ends in different processes, and that we can close the two
+   sides separately.
 
-   trio.run(main)
 
-If we naively cycle between these three tasks in round-robin style,
-then we put an item, then put an item, then get an item, then put an
-item, then put an item, then get an item, ... and since on each cycle
-we add two items to the queue but only remove one, then over time the
-queue size grows arbitrarily large, our latency is terrible, we run
-out of memory, it's just generally bad news all around.
+A simple channel example
+++++++++++++++++++++++++
 
-By placing an upper bound on our queue's size, we avoid this problem.
-If the queue gets too big, then it applies *backpressure*: ``put``
-blocks and forces the producers to slow down and wait until the
-consumer calls ``get``.
+Here's a simple example of how to use channels:
 
-.. autoclass:: Queue
-   :members:
+.. literalinclude:: reference-core/channels-simple.py
+
+If you run this, it prints:
+
+.. code-block:: none
+
+   got value "message 0"
+   got value "message 1"
+   got value "message 2"
+
+And then it hangs forever. (Use control-C to quit.)
+
+
+.. _channel-shutdown:
+
+Clean shutdown with channels
+++++++++++++++++++++++++++++
+
+Of course we don't generally like it when programs hang. What
+happened? The problem is that the producer sent 3 messages and then
+exited, but the consumer has no way to tell that the producer is gone:
+for all it knows, another message might be coming along any moment. So
+it hangs forever waiting for the 4th message.
+
+Here's a new version that fixes this: it produces the same output as
+the previous version, and then exits cleanly. The only change is the
+addition of ``async with`` blocks inside the producer and consumer:
+
+.. literalinclude:: reference-core/channels-shutdown.py
+   :emphasize-lines: 10,15
+
+The really important thing here is the producer's ``async with`` .
+When the producer exits, this closes the ``send_channel``, and that
+tells the consumer that no more messages are coming, so it can cleanly
+exit its ``async for`` loop. Then the program shuts down because both
+tasks have exited.
+
+We also added an ``async with`` to the consumer. This isn't as
+important, but can it help us catch mistakes or other problems. For
+example, suppose that the consumer exited early for some reason –
+maybe because of a bug. Then the producer would be sending messages
+into the void, and might get stuck indefinitely. But, if the consumer
+closes its ``receive_channel``, then the producer will get a
+:exc:`BrokenResourceError` to alert it that it should stop sending
+messages because no-one is listening.
+
+If you want to see the effect of the consumer exiting early, try
+adding a ``break`` statement to the ``async for`` loop – you should
+see a :exc:`BrokenResourceError` from the producer.
+
+
+.. _channel-mpmc:
+
+Managing multiple producers and/or multiple consumers
++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+You can also have multiple producers, and multiple consumers, all
+sharing the same channel. However, this makes shutdown a little more
+complicated.
+
+For example, consider this naive extension of our previous example,
+now with two producers and two consumers:
+
+.. literalinclude:: reference-core/channels-mpmc-broken.py
+
+The two producers, A and B, send 3 messages apiece. These are then
+randomly distributed between the two consumers, X and Y. So we're
+hoping to see some output like:
+
+.. code-block:: none
+
+   consumer Y got value '0 from producer B'
+   consumer X got value '0 from producer A'
+   consumer Y got value '1 from producer A'
+   consumer Y got value '1 from producer B'
+   consumer X got value '2 from producer B'
+   consumer X got value '2 from producer A'
+
+However, on most runs, that's not what happens – the first part of the
+output is OK, and then when we get to the end the program crashes with
+:exc:`ClosedResourceError`. If you run the program a few times, you'll
+see that sometimes the traceback shows ``send`` crashing, and other
+times it shows ``receive`` crashing, and you might even find that on
+some runs it doesn't crash at all.
+
+Here's what's happening: suppose that producer A finishes first. It
+exits, and its ``async with`` block closes the ``send_channel``. But
+wait! Producer B was still using that ``send_channel``... so the next
+time B calls ``send``, it gets a :exc:`ClosedResourceError`.
+
+Sometimes, though if we're lucky, the two producers might finish at
+the same time (or close enough), so they both make their last ``send``
+before either of them closes the ``send_channel``.
+
+But, even if that happens, we're not out of the woods yet! After the
+producers exit, the two consumers race to be the first to notice that
+the ``send_channel`` has closed. Suppose that X wins the race. It
+exits its ``async for`` loop, then exits the ``async with`` block...
+and closes the ``receive_channel``, while Y is still using it. Again,
+this causes a crash.
+
+We could avoid this by using some complicated bookkeeping to make sure
+that only the *last* producer and the *last* consumer close their
+channel endpoints... but that would be tiresome and fragile.
+Fortunately, there's a better way! Here's a fixed version of our
+program above:
+
+.. literalinclude:: reference-core/channels-mpmc-fixed.py
+   :emphasize-lines: 7, 9, 10, 12, 13
+
+This example demonstrates using the :meth:`SendChannel.clone
+<trio.abc.SendChannel.clone>` and :meth:`ReceiveChannel.clone
+<trio.abc.ReceiveChannel.clone>` methods. What these do is create
+copies of our endpoints, that act just like the original – except that
+they can be closed independently. And the underlying channel is only
+closed after *all* the clones have been closed. So this completely
+solves our problem with shutdown, and if you run this program, you'll
+see it print its six lines of output and then exits cleanly.
+
+Notice a small trick we use: the code in ``main`` creates clone
+objects to pass into all the child tasks, and then closes the original
+objects using ``async with``. Another option is to pass clones into
+all-but-one of the child tasks, and then pass the original object into
+the last task, like::
+
+   # Also works, but is more finicky:
+   send_channel, receive_channel = trio.open_memory_channel(0)
+   nursery.start_soon(producer, "A", send_channel.clone())
+   nursery.start_soon(producer, "B", send_channel)
+   nursery.start_soon(consumer, "X", receive_channel.clone())
+   nursery.start_soon(consumer, "Y", receive_channel)
+
+But this is more error-prone, especially if you use a loop to spawn
+the producers/consumers.
+
+Just make sure that you don't write::
+
+   # Broken, will cause program to hang:
+   send_channel, receive_channel = trio.open_memory_channel(0)
+   nursery.start_soon(producer, "A", send_channel.clone())
+   nursery.start_soon(producer, "B", send_channel.clone())
+   nursery.start_soon(consumer, "X", receive_channel.clone())
+   nursery.start_soon(consumer, "Y", receive_channel.clone())
+
+Here we pass clones into the tasks, but never close the original
+objects. That means we have 3 send channel objects (the original + two
+clones), but we only close 2 of them, so the consumers will hang
+around forever waiting for that last one to be closed.
+
+
+.. _channel-buffering:
+
+Buffering in channels
++++++++++++++++++++++
+
+When you call :func:`open_memory_channel`, you have to specify how
+many values can be buffered internally in the channel. If the buffer
+is full, then any task that calls :meth:`~trio.abc.SendChannel.send`
+will stop and wait for another task to call
+:meth:`~trio.abc.ReceiveChannel.receive`. This is useful because it
+produces *backpressure*: if the channel producers are running faster
+than the consumers, then it forces the producers to slow down.
+
+You can disable buffering entirely, by doing
+``open_memory_channel(0)``. In that case any task calls
+:meth:`~trio.abc.SendChannel.send` will wait until another task calls
+:meth:`~trio.abc.ReceiveChannel.receive`, and vice versa. This is similar to
+how channels work in the `classic Communicating Sequential Processes
+model <https://en.wikipedia.org/wiki/Channel_(programming)>`__, and is
+a reasonable default if you aren't sure what size buffer to use.
+(That's why we used it in the examples above.)
+
+At the other extreme, you can make the buffer unbounded by using
+``open_memory_channel(math.inf)``. In this case,
+:meth:`~trio.abc.SendChannel.send` *always* returns immediately.
+Normally, this is a bad idea. To see why, consider a program where the
+producer runs more quickly than the consumer:
+
+.. literalinclude:: reference-core/channels-backpressure.py
+
+If you run this program, you'll see output like:
+
+.. code-block:: none
+
+   Sent message: 0
+   Received message: 0
+   Sent message: 1
+   Sent message: 2
+   Sent message: 3
+   Sent message: 4
+   Sent message: 5
+   Sent message: 6
+   Sent message: 7
+   Sent message: 8
+   Sent message: 9
+   Received message: 1
+   Sent message: 10
+   Sent message: 11
+   Sent message: 12
+   ...
+
+On average, the producer sends ten messages per second, but the
+consumer only calls ``receive`` once per second. That means that each
+second, the channel's internal buffer has to grow to hold an extra
+nine items. After a minute, the buffer will have ~540 items in it;
+after an hour, that grows to ~32,400. Eventually, the program will run
+out of memory. And well before we run out of memory, our latency on
+handling individual messages will become abysmal. For example, at the
+one minute mark, the producer is sending message ~600, but the
+producer is still processing message ~60. Message 600 will have to sit
+in the channel for ~9 minutes before the consumer catches up and
+processes it.
+
+Now try replacing ``open_memory_channel(math.inf)`` with
+``open_memory_channel(0)``, and run it again. We get output like:
+
+.. code-block:: none
+
+   Sent message: 0
+   Received message: 0
+   Received message: 1
+   Sent message: 1
+   Received message: 2
+   Sent message: 2
+   Sent message: 3
+   Received message: 3
+   ...
+
+Now the ``send`` calls wait for the ``receive`` calls to finish, which
+forces the producer to slow down to match the consumer's speed. (It
+might look strange that some values are reported as "Received" before
+they're reported as "Sent"; this happens because the actual
+send/receive happen at the same time, so which line gets printed first
+is random.)
+
+Now, let's try setting a small but nonzero buffer size, like
+``open_memory_channel(3)``. what do you think will happen?
+
+I get:
+
+.. code-block:: none
+
+   Sent message: 0
+   Received message: 0
+   Sent message: 1
+   Sent message: 2
+   Sent message: 3
+   Received message: 1
+   Sent message: 4
+   Received message: 2
+   Sent message: 5
+   ...
+
+So you can see that the producer runs ahead by 3 messages, and then
+stops to wait: when the consumer reads message 1, it sends message 4,
+then when the consumer reads message 2, it sends message 5, and so on.
+Once it reaches the steady state, this version acts just like our
+previous version where we set the buffer size to 0, except that it
+uses a bit more memory and each message sits in the buffer for a bit
+longer before being processed (i.e., the message latency is higher).
+
+Of course real producers and consumers are usually more complicated
+than this, and in some situations, a modest amount of buffering might
+improve throughput. But too much buffering wastes memory and increases
+latency, so if you want to tune your application you should experiment
+to see what value works best for you.
+
+**Why do we even support unbounded buffers then?** Good question!
+Despite everything we saw above, there are times when you actually do
+need an unbounded buffer. For example, consider a web crawler that
+uses a channel to keep track of all the URLs it still wants to crawl.
+Each crawler runs a loop where it takes a URL from the channel,
+fetches it, checks the HTML for outgoing links, and then adds the new
+URLs to the channel. This creates a *circular flow*, where each
+consumer is also a producer. In this case, if your channel buffer gets
+full, then the crawlers will block when they try to add new URLs to
+the channel, and if all the crawlers got blocked, then they aren't
+taking any URLs out of the channel, so they're stuck forever in a
+deadlock. Using an unbounded channel avoids this, because it means
+that :meth:`~trio.abc.SendChannel.send` never blocks.
 
 
 Lower-level synchronization primitives
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Personally, I find that events and queues are usually enough to
+Personally, I find that events and channels are usually enough to
 implement most things I care about, and lead to easier to read code
 than the lower-level primitives discussed in this section. But if you
 need them, they're here. (If you find yourself reaching for these
@@ -1484,49 +1711,10 @@ Getting back into the trio thread from another thread
    :members:
 
 This will probably be clearer with an example. Here we demonstrate how
-to spawn a child thread, and then use a :class:`trio.Queue` to send
-messages between the thread and a trio task::
+to spawn a child thread, and then use a :ref:`memory channel
+<channels>` to send messages between the thread and a trio task:
 
-   import trio
-   import threading
-
-   def thread_fn(portal, request_queue, response_queue):
-       while True:
-           # Since we're in a thread, we can't call trio.Queue methods
-           # directly -- so we use our portal to call them.
-           request = portal.run(request_queue.get)
-           # We use 'None' as a request to quit
-           if request is not None:
-               response = request + 1
-               portal.run(response_queue.put, response)
-           else:
-               # acknowledge that we're shutting down, and then do it
-               portal.run(response_queue.put, None)
-               return
-
-   async def main():
-       portal = trio.BlockingTrioPortal()
-       request_queue = trio.Queue(1)
-       response_queue = trio.Queue(1)
-       thread = threading.Thread(
-           target=thread_fn,
-           args=(portal, request_queue, response_queue))
-       thread.start()
-
-       # prints "1"
-       await request_queue.put(0)
-       print(await response_queue.get())
-
-       # prints "2"
-       await request_queue.put(1)
-       print(await response_queue.get())
-
-       # prints "None"
-       await request_queue.put(None)
-       print(await response_queue.get())
-       thread.join()
-
-   trio.run(main)
+.. literalinclude:: reference-core/blocking-trio-portal-example.py
 
 
 Exceptions and warnings
@@ -1538,7 +1726,13 @@ Exceptions and warnings
 
 .. autoexception:: WouldBlock
 
-.. autoexception:: ResourceBusyError
+.. autoexception:: EndOfChannel
+
+.. autoexception:: BusyResourceError
+
+.. autoexception:: ClosedResourceError
+
+.. autoexception:: BrokenResourceError
 
 .. autoexception:: RunFinishedError
 

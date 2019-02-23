@@ -413,11 +413,6 @@ Specific style guidelines
 
   and the ``nowait`` version raises :exc:`trio.WouldBlock` if it would block.
 
-* The word ``monitor`` is used for APIs that involve an
-  :class:`trio.hazmat.UnboundedQueue` receiving some kind of events.
-  (Examples: nursery ``.monitor`` attribute, some of the low-level I/O
-  functions in :mod:`trio.hazmat`.)
-
 * ...we should, but currently don't, have a solid convention to
   distinguish between functions that take an async callable and those
   that take a sync callable. See `issue #68
@@ -447,7 +442,7 @@ strategy is to make sure that it's possible for independent packages
 to add new features on top of trio. Enforcing the ``trio`` vs
 ``trio._core`` split is a way of `eating our own dogfood
 <https://en.wikipedia.org/wiki/Eating_your_own_dog_food>`__: basic
-functionality like :class:`trio.Queue` and :mod:`trio.socket` is
+functionality like :class:`trio.Lock` and :mod:`trio.socket` is
 actually implemented solely in terms of public APIs. And the hope is
 that by doing this, we increase the chances that someone who comes up
 with a better kind of queue or wants to add some new functionality
@@ -458,11 +453,9 @@ of our public APIs without having to modify trio internals.
 Inside ``trio._core``
 ~~~~~~~~~~~~~~~~~~~~~
 
-There are three notable sub-modules that are largely independent of
+There are two notable sub-modules that are largely independent of
 the rest of trio, and could (possibly should?) be extracted into their
 own independent packages:
-
-* ``_result.py``: Defines :class:`~trio.hazmat.Result`.
 
 * ``_multierror.py``: Implements :class:`MultiError` and associated
   infrastructure.
@@ -472,7 +465,7 @@ own independent packages:
 
 The most important submodule, where everything is integrated, is
 ``_run.py``. (This is also by far the largest submodule; it'd be nice
-to factor bits of it out with possible, but it's tricky because the
+to factor bits of it out where possible, but it's tricky because the
 core functionality genuinely is pretty intertwined.) Notably, this is
 where cancel scopes, nurseries, and :class:`~trio.hazmat.Task` are
 defined; it's also where the scheduler state and :func:`trio.run`
@@ -484,7 +477,7 @@ three implementations:
 
 * ``EpollIOManager`` in ``_io_epoll.py`` (used on Linux, illumos)
 
-* ``KqueueIOManager`` in ``_io_kqueue.py`` (used on MacOS, \*BSD)
+* ``KqueueIOManager`` in ``_io_kqueue.py`` (used on macOS, \*BSD)
 
 * ``WindowsIOManager`` in ``_io_windows.py`` (used on Windows)
 

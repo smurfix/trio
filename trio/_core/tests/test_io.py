@@ -36,48 +36,46 @@ def socketpair():
         sock.close()
 
 
+def using_fileno(fn):
+    def fileno_wrapper(fileobj):
+        return fn(fileobj.fileno())
+
+    name = "<{} on fileno>".format(fn.__name__)
+    fileno_wrapper.__name__ = fileno_wrapper.__qualname__ = name
+    return fileno_wrapper
+
+
 wait_readable_options = [_core.wait_socket_readable]
 wait_writable_options = [_core.wait_socket_writable]
+notify_close_options = [_core.notify_socket_close]
+
+# We aren't testing the _fd_ versions, because they're the same as the socket
+# ones. But if they ever stop being the same we should notice and add tests!
 if hasattr(_core, "wait_readable"):
-    wait_readable_options.append(_core.wait_readable)
-
-    async def wait_readable_fd(fileobj):
-        return await _core.wait_readable(fileobj.fileno())
-
-    wait_readable_options.append(wait_readable_fd)
+    assert _core.wait_socket_readable is _core.wait_readable
 if hasattr(_core, "wait_writable"):
-    wait_writable_options.append(_core.wait_writable)
+    assert _core.wait_socket_writable is _core.wait_writable
+if hasattr(_core, "notify_fd_close"):
+    assert _core.notify_socket_close is _core.notify_fd_close
 
-    async def wait_writable_fd(fileobj):
-        return await _core.wait_writable(fileobj.fileno())
+for options_list in [
+    wait_readable_options, wait_writable_options, notify_close_options
+]:
+    options_list += [using_fileno(f) for f in options_list]
 
-    wait_writable_options.append(wait_writable_fd)
-
-# Decorators that feed in different settings for wait_readable / wait_writable.
-# Note that if you use both decorators on the same test, it will run all
-# N**2 *combinations*
+# Decorators that feed in different settings for wait_readable / wait_writable
+# / notify_close.
+# Note that if you use all three decorators on the same test, it will run all
+# N**4 *combinations*
 read_socket_test = pytest.mark.parametrize(
     "wait_readable", wait_readable_options, ids=lambda fn: fn.__name__
 )
 write_socket_test = pytest.mark.parametrize(
     "wait_writable", wait_writable_options, ids=lambda fn: fn.__name__
 )
-
-
-async def test_wait_socket_type_checking(socketpair):
-    a, b = socketpair
-
-    # wait_socket_* accept actual socket objects, only
-    for sock_fn in [_core.wait_socket_readable, _core.wait_socket_writable]:
-        with pytest.raises(TypeError):
-            await sock_fn(a.fileno())
-
-        class AllegedSocket(stdlib_socket.socket):
-            pass
-
-        with AllegedSocket() as alleged_socket:
-            with pytest.raises(TypeError):
-                await sock_fn(alleged_socket)
+notify_close_test = pytest.mark.parametrize(
+    "notify_close", notify_close_options, ids=lambda fn: fn.__name__
+)
 
 
 # XX These tests are all a bit dicey because they can't distinguish between
@@ -159,7 +157,7 @@ async def test_double_read(socketpair, wait_readable):
         nursery.start_soon(wait_readable, a)
         await wait_all_tasks_blocked()
         with assert_checkpoints():
-            with pytest.raises(_core.ResourceBusyError):
+            with pytest.raises(_core.BusyResourceError):
                 await wait_readable(a)
         nursery.cancel_scope.cancel()
 
@@ -174,9 +172,34 @@ async def test_double_write(socketpair, wait_writable):
         nursery.start_soon(wait_writable, a)
         await wait_all_tasks_blocked()
         with assert_checkpoints():
-            with pytest.raises(_core.ResourceBusyError):
+            with pytest.raises(_core.BusyResourceError):
                 await wait_writable(a)
         nursery.cancel_scope.cancel()
+
+
+@read_socket_test
+@write_socket_test
+@notify_close_test
+async def test_interrupted_by_close(
+    socketpair, wait_readable, wait_writable, notify_close
+):
+    a, b = socketpair
+
+    async def reader():
+        with pytest.raises(_core.ClosedResourceError):
+            await wait_readable(a)
+
+    async def writer():
+        with pytest.raises(_core.ClosedResourceError):
+            await wait_writable(a)
+
+    fill_socket(a)
+
+    async with _core.open_nursery() as nursery:
+        nursery.start_soon(reader)
+        nursery.start_soon(writer)
+        await wait_all_tasks_blocked()
+        notify_close(a)
 
 
 @read_socket_test

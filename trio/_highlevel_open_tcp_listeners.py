@@ -1,3 +1,4 @@
+import errno
 import sys
 from math import inf
 
@@ -32,7 +33,7 @@ __all__ = ["open_tcp_listeners", "serve_tcp"]
 # different operating systems. But on every system, passing in a too-large
 # backlog just causes it to be silently truncated to the configured maximum,
 # so this is unnecessary -- we can just pass in "infinity" and get the maximum
-# that way. (Verified on Windows, Linux, MacOS using
+# that way. (Verified on Windows, Linux, macOS using
 # notes-to-self/measure-listen-backlog.py)
 def _compute_backlog(backlog):
     if backlog is None:
@@ -63,9 +64,9 @@ async def open_tcp_listeners(port, *, host=None, backlog=None):
           passed to :func:`~socket.getaddrinfo` with the ``AI_PASSIVE`` flag
           set.
 
-          If you want to bind to bind to the wildcard address on both IPv4 and
-          IPv6, in order to accept connections on all available interfaces,
-          then pass ``None``. This is the default.
+          If you want to bind to the wildcard address on both IPv4 and IPv6,
+          in order to accept connections on all available interfaces, then
+          pass ``None``. This is the default.
 
           If you have a specific interface you want to bind to, pass its IP
           address or hostname here. If a hostname resolves to multiple IP
@@ -100,9 +101,23 @@ async def open_tcp_listeners(port, *, host=None, backlog=None):
     )
 
     listeners = []
+    unsupported_address_families = []
     try:
         for family, type, proto, _, sockaddr in addresses:
-            sock = tsocket.socket(family, type, proto)
+            try:
+                sock = tsocket.socket(family, type, proto)
+            except OSError as ex:
+                if ex.errno == errno.EAFNOSUPPORT:
+                    # If a system only supports IPv4, or only IPv6, it
+                    # is still likely that getaddrinfo will return
+                    # both an IPv4 and an IPv6 address. As long as at
+                    # least one of the returned addresses can be
+                    # turned into a socket, we won't complain about a
+                    # failure to create the other.
+                    unsupported_address_families.append(ex)
+                    continue
+                else:
+                    raise
             try:
                 # See https://github.com/python-trio/trio/issues/39
                 if sys.platform == "win32":
@@ -130,6 +145,13 @@ async def open_tcp_listeners(port, *, host=None, backlog=None):
         for listener in listeners:
             listener.socket.close()
         raise
+
+    if unsupported_address_families and not listeners:
+        raise OSError(
+            errno.EAFNOSUPPORT,
+            "This system doesn't support any of the kinds of "
+            "socket that that address could use"
+        ) from trio.MultiError(unsupported_address_families)
 
     return listeners
 
@@ -168,8 +190,8 @@ async def serve_tcp(
             listeners = await nursery.start(serve_tcp, handler, 0)
             client_stream = await open_stream_to_socket_listener(listeners[0])
 
-            # Then send and receive data on 'client', for example:
-            await client.send_all(b"GET / HTTP/1.0\\r\\n\\r\\n")
+            # Then send and receive data on 'client_stream', for example:
+            await client_stream.send_all(b"GET / HTTP/1.0\\r\\n\\r\\n")
 
     This avoids several common pitfalls:
 

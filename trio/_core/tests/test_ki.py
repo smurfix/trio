@@ -1,3 +1,4 @@
+import outcome
 import pytest
 import sys
 import os
@@ -181,7 +182,7 @@ async def test_agen_protection():
         agen_unprotected1,
         agen_unprotected2,
     ]:
-        async for _ in agen_fn():
+        async for _ in agen_fn():  # noqa
             assert not _core.currently_ki_protected()
 
         # asynccontextmanager insists that the function passed must itself be an
@@ -336,7 +337,7 @@ def test_ki_protection_works():
         task = _core.current_task()
 
         def abort(_):
-            _core.reschedule(task, _core.Value(1))
+            _core.reschedule(task, outcome.Value(1))
             return _core.Abort.FAILED
 
         assert await _core.wait_task_rescheduled(abort) == 1
@@ -355,7 +356,7 @@ def test_ki_protection_works():
         task = _core.current_task()
 
         def abort(raise_cancel):
-            result = _core.Result.capture(raise_cancel)
+            result = outcome.capture(raise_cancel)
             _core.reschedule(task, result)
             return _core.Abort.FAILED
 
@@ -409,7 +410,7 @@ def test_ki_protection_works():
     @_core.enable_ki_protection
     async def main():
         assert _core.currently_ki_protected()
-        with _core.open_cancel_scope() as cancel_scope:
+        with _core.CancelScope() as cancel_scope:
             cancel_scope.cancel()
             with pytest.raises(_core.Cancelled):
                 await _core.checkpoint()
@@ -537,7 +538,7 @@ def test_ki_wakes_us_up():
         # the IO manager blocking primitive. There really is no way to
         # deterministically interlock with that, so we have to use sleep and
         # hope it's long enough.
-        time.sleep(1)
+        time.sleep(1.1)
         with lock:
             print("thread doing ki_self()")
             ki_self()
@@ -580,11 +581,11 @@ def test_ki_wakes_us_up():
             print("joining thread", sys.exc_info())
             thread.join()
 
-    start = time.monotonic()
+    start = time.perf_counter()
     try:
         _core.run(main)
     finally:
-        end = time.monotonic()
+        end = time.perf_counter()
         print("duration", end - start)
         print("sys.exc_info", sys.exc_info())
     assert 1.0 <= (end - start) < 2

@@ -6,10 +6,10 @@ import tempfile
 
 import pytest
 
-from .._core.tests.tutil import have_ipv6
+from .._core.tests.tutil import can_bind_ipv6
 from .. import sleep
 from .. import _core
-from .._highlevel_generic import ClosedStreamError, aclose_forcefully
+from .._highlevel_generic import aclose_forcefully
 from ..testing import *
 from ..testing._check_streams import _assert_raises
 from ..testing._memory_streams import _UnboundedByteQueue
@@ -234,7 +234,7 @@ async def test_Sequencer_cancel():
     seq = Sequencer()
 
     async def child(i):
-        with _core.open_cancel_scope() as scope:
+        with _core.CancelScope() as scope:
             if i == 1:
                 scope.cancel()
             try:
@@ -310,7 +310,7 @@ async def test_mock_clock_autojump(mock_clock):
     mock_clock.autojump_threshold = 0
     assert mock_clock.autojump_threshold == 0
 
-    real_start = time.monotonic()
+    real_start = time.perf_counter()
 
     virtual_start = _core.current_time()
     for i in range(10):
@@ -320,10 +320,11 @@ async def test_mock_clock_autojump(mock_clock):
         assert virtual_start + 10 * i == _core.current_time()
         virtual_start = _core.current_time()
 
-    real_duration = time.monotonic() - real_start
+    real_duration = time.perf_counter() - real_start
     print(
-        "Slept {} seconds in {} seconds"
-        .format(10 * sum(range(10)), real_duration)
+        "Slept {} seconds in {} seconds".format(
+            10 * sum(range(10)), real_duration
+        )
     )
     assert real_duration < 1
 
@@ -378,9 +379,9 @@ def test_mock_clock_autojump_preset():
     # actually in use, and it gets picked up
     mock_clock = MockClock(autojump_threshold=0.1)
     mock_clock.autojump_threshold = 0.01
-    real_start = time.monotonic()
+    real_start = time.perf_counter()
     _core.run(sleep, 10000, clock=mock_clock)
-    assert time.monotonic() - real_start < 1
+    assert time.perf_counter() - real_start < 1
 
 
 async def test_mock_clock_autojump_0_and_wait_all_tasks_blocked(mock_clock):
@@ -468,8 +469,8 @@ async def test__UnboundeByteQueue():
         nursery.start_soon(getter, b"xyz")
         nursery.start_soon(putter, b"xyz")
 
-    # Two gets at the same time -> ResourceBusyError
-    with pytest.raises(_core.ResourceBusyError):
+    # Two gets at the same time -> BusyResourceError
+    with pytest.raises(_core.BusyResourceError):
         async with _core.open_nursery() as nursery:
             nursery.start_soon(getter, b"asdf")
             nursery.start_soon(getter, b"asdf")
@@ -477,7 +478,7 @@ async def test__UnboundeByteQueue():
     # Closing
 
     ubq.close()
-    with pytest.raises(ClosedStreamError):
+    with pytest.raises(_core.ClosedResourceError):
         ubq.put(b"---")
 
     assert ubq.get_nowait(10) == b""
@@ -523,7 +524,7 @@ async def test_MemorySendStream():
     with assert_checkpoints():
         assert await mss.get_data() == b"456"
 
-    # Call send_all twice at once; one should get ResourceBusyError and one
+    # Call send_all twice at once; one should get BusyResourceError and one
     # should succeed. But we can't let the error propagate, because it might
     # cause the other to be cancelled before it can finish doing its thing,
     # and we don't know which one will get the error.
@@ -533,7 +534,7 @@ async def test_MemorySendStream():
         nonlocal resource_busy_count
         try:
             await do_send_all(b"xxx")
-        except _core.ResourceBusyError:
+        except _core.BusyResourceError:
             resource_busy_count += 1
 
     async with _core.open_nursery() as nursery:
@@ -547,7 +548,7 @@ async def test_MemorySendStream():
 
     assert await mss.get_data() == b"xxx"
     assert await mss.get_data() == b""
-    with pytest.raises(ClosedStreamError):
+    with pytest.raises(_core.ClosedResourceError):
         await do_send_all(b"---")
 
     # hooks
@@ -605,7 +606,7 @@ async def test_MemoryReceiveStream():
     with pytest.raises(TypeError):
         await do_receive_some(None)
 
-    with pytest.raises(_core.ResourceBusyError):
+    with pytest.raises(_core.BusyResourceError):
         async with _core.open_nursery() as nursery:
             nursery.start_soon(do_receive_some, 10)
             nursery.start_soon(do_receive_some, 10)
@@ -620,7 +621,7 @@ async def test_MemoryReceiveStream():
     assert await do_receive_some(10) == b""
     assert await do_receive_some(10) == b""
 
-    with pytest.raises(ClosedStreamError):
+    with pytest.raises(_core.ClosedResourceError):
         mrs.put_data(b"---")
 
     async def receive_some_hook():
@@ -649,7 +650,7 @@ async def test_MemoryReceiveStream():
         await mrs2.aclose()
     assert record == ["closed"]
 
-    with pytest.raises(ClosedStreamError):
+    with pytest.raises(_core.ClosedResourceError):
         await mrs2.receive_some(10)
 
 
@@ -657,19 +658,19 @@ async def test_MemoryRecvStream_closing():
     mrs = MemoryReceiveStream()
     # close with no pending data
     mrs.close()
-    with pytest.raises(ClosedStreamError):
+    with pytest.raises(_core.ClosedResourceError):
         assert await mrs.receive_some(10) == b""
     # repeated closes ok
     mrs.close()
     # put_data now fails
-    with pytest.raises(ClosedStreamError):
+    with pytest.raises(_core.ClosedResourceError):
         mrs.put_data(b"123")
 
     mrs2 = MemoryReceiveStream()
     # close with pending data
     mrs2.put_data(b"xyz")
     mrs2.close()
-    with pytest.raises(ClosedStreamError):
+    with pytest.raises(_core.ClosedResourceError):
         await mrs2.receive_some(10)
 
 
@@ -706,36 +707,27 @@ async def test_memory_stream_one_way_pair():
     await s.send_all(b"123")
     assert await r.receive_some(10) == b"123"
 
-    # This fails if we pump on r.receive_some_hook; we need to pump on s.send_all_hook
-    async def sender():
-        await wait_all_tasks_blocked()
-        await s.send_all(b"abc")
-
     async def receiver(expected):
         assert await r.receive_some(10) == expected
 
+    # This fails if we pump on r.receive_some_hook; we need to pump on s.send_all_hook
     async with _core.open_nursery() as nursery:
         nursery.start_soon(receiver, b"abc")
-        nursery.start_soon(sender)
+        await wait_all_tasks_blocked()
+        await s.send_all(b"abc")
 
     # And this fails if we don't pump from close_hook
-    async def aclose_after_all_tasks_blocked():
+    async with _core.open_nursery() as nursery:
+        nursery.start_soon(receiver, b"")
         await wait_all_tasks_blocked()
         await s.aclose()
 
-    async with _core.open_nursery() as nursery:
-        nursery.start_soon(receiver, b"")
-        nursery.start_soon(aclose_after_all_tasks_blocked)
-
     s, r = memory_stream_one_way_pair()
 
-    async def close_after_all_tasks_blocked():
-        await wait_all_tasks_blocked()
-        s.close()
-
     async with _core.open_nursery() as nursery:
         nursery.start_soon(receiver, b"")
-        nursery.start_soon(close_after_all_tasks_blocked)
+        await wait_all_tasks_blocked()
+        s.close()
 
     s, r = memory_stream_one_way_pair()
 
@@ -830,7 +822,7 @@ async def test_open_stream_to_socket_listener():
     sock.listen(10)
     await check(SocketListener(sock))
 
-    if have_ipv6:
+    if can_bind_ipv6:
         # Listener bound to IPv6 wildcard (needs special handling)
         sock = tsocket.socket(family=tsocket.AF_INET6)
         await sock.bind(("::", 0))
@@ -840,7 +832,7 @@ async def test_open_stream_to_socket_listener():
     if hasattr(tsocket, "AF_UNIX"):
         # Listener bound to Unix-domain socket
         sock = tsocket.socket(family=tsocket.AF_UNIX)
-        # can't use pytest's tmpdir; if we try then MacOS says "OSError:
+        # can't use pytest's tmpdir; if we try then macOS says "OSError:
         # AF_UNIX path too long"
         with tempfile.TemporaryDirectory() as tmpdir:
             path = "{}/sock".format(tmpdir)

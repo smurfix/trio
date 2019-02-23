@@ -92,7 +92,7 @@ class MockClock(Clock):
         self._autojump_task = None
         self._autojump_cancel_scope = None
         # kept as an attribute so that our tests can monkeypatch it
-        self._real_clock = time.monotonic
+        self._real_clock = time.perf_counter
 
         # use the property update logic to set initial values
         self.rate = rate
@@ -100,8 +100,9 @@ class MockClock(Clock):
 
     def __repr__(self):
         return (
-            "<MockClock, time={:.7f}, rate={} @ {:#x}>"
-            .format(self.current_time(), self._rate, id(self))
+            "<MockClock, time={:.7f}, rate={} @ {:#x}>".format(
+                self.current_time(), self._rate, id(self)
+            )
         )
 
     @property
@@ -123,9 +124,18 @@ class MockClock(Clock):
     def autojump_threshold(self):
         return self._autojump_threshold
 
+    @autojump_threshold.setter
+    def autojump_threshold(self, new_autojump_threshold):
+        self._autojump_threshold = float(new_autojump_threshold)
+        self._maybe_spawn_autojump_task()
+        if self._autojump_cancel_scope is not None:
+            # Task is running and currently blocked on the old setting, wake
+            # it up so it picks up the new setting
+            self._autojump_cancel_scope.cancel()
+
     async def _autojumper(self):
         while True:
-            with _core.open_cancel_scope() as cancel_scope:
+            with _core.CancelScope() as cancel_scope:
                 self._autojump_cancel_scope = cancel_scope
                 try:
                     # If the autojump_threshold changes, then the setter does
@@ -160,15 +170,6 @@ class MockClock(Clock):
                 return
             if clock is self:
                 self._autojump_task = _core.spawn_system_task(self._autojumper)
-
-    @autojump_threshold.setter
-    def autojump_threshold(self, new_autojump_threshold):
-        self._autojump_threshold = float(new_autojump_threshold)
-        self._maybe_spawn_autojump_task()
-        if self._autojump_cancel_scope is not None:
-            # Task is running and currently blocked on the old setting, wake
-            # it up so it picks up the new setting
-            self._autojump_cancel_scope.cancel()
 
     def _real_to_virtual(self, real):
         real_offset = real - self._real_base
