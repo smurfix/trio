@@ -129,20 +129,6 @@ try:
 except ImportError:
     pass
 
-# expose these functions to trio.socket
-from socket import (
-    gaierror,
-    herror,
-    gethostname,
-    ntohs,
-    htonl,
-    htons,
-    inet_aton,
-    inet_ntoa,
-    inet_pton,
-    inet_ntop,
-)
-
 # not always available so expose only if
 try:
     from socket import (
