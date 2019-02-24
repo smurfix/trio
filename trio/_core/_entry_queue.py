@@ -5,8 +5,14 @@ import attr
 try:
     import machine
     machine.disable_irq
-except (ImportError, AttributeError):
+except ImportError:
     from threading import RLock
+except AttributeError:
+    class RLock:
+        def __enter__(self):
+            pass
+        def __exit__(self, *tb):
+            pass
 else:
     class RLock:
         def __enter__(self):
