@@ -27,7 +27,6 @@ from async_generator import isasyncgen
 from sortedcontainers import SortedDict
 from outcome import Error, Value, capture
 
-from . import _public
 from ._entry_queue import EntryQueue, TrioToken
 from ._exceptions import (TrioInternalError, RunFinishedError, Cancelled)
 from ._ki import (
@@ -802,9 +801,6 @@ class Runner:
         if self.instruments:
             self.instrument("after_run")
 
-    # Methods marked with @_public get converted into functions exported by
-    # trio.hazmat:
-    @_public
     def current_statistics(self):
         """Returns an object containing run-loop-level debugging information.
 
@@ -841,7 +837,6 @@ class Runner:
             run_sync_soon_queue_size=self.entry_queue.size(),
         )
 
-    @_public
     def current_time(self):
         """Returns the current time according to trio's internal clock.
 
@@ -854,14 +849,12 @@ class Runner:
         """
         return self.clock.current_time()
 
-    @_public
     def current_clock(self):
         """Returns the current :class:`~trio.abc.Clock`.
 
         """
         return self.clock
 
-    @_public
     def current_root_task(self):
         """Returns the current root :class:`Task`.
 
@@ -874,7 +867,6 @@ class Runner:
     # Core task handling primitives
     ################
 
-    @_public
     def reschedule(self, task, next_send=_NO_SEND):
         """Reschedule the given task with the given
         :class:`outcome.Outcome`.
@@ -1073,7 +1065,6 @@ class Runner:
     # System tasks and init
     ################
 
-    @_public
     def spawn_system_task(self, async_fn, *args, name=None):
         """Spawn a "system" task.
 
@@ -1134,7 +1125,6 @@ class Runner:
     # Outside context problems
     ################
 
-    @_public
     def current_trio_token(self):
         """Retrieve the :class:`TrioToken` for the current call to
         :func:`trio.run`.
@@ -1183,7 +1173,6 @@ class Runner:
 
     waiting_for_idle = attr.ib(default=attr.Factory(SortedDict))
 
-    @_public
     async def wait_all_tasks_blocked(self, cushion=0.0, tiebreaker=0):
         """Block until there are no runnable tasks.
 
@@ -1276,7 +1265,6 @@ class Runner:
                     "Instrument has been disabled.", method_name, instrument
                 )
 
-    @_public
     def add_instrument(self, instrument):
         """Start instrumenting the current run loop with the given instrument.
 
@@ -1289,7 +1277,6 @@ class Runner:
         if instrument not in self.instruments:
             self.instruments.append(instrument)
 
-    @_public
     def remove_instrument(self, instrument):
         """Stop instrumenting the current run loop with the given instrument.
 
@@ -1737,7 +1724,7 @@ def wrapper(*args, **kwargs):
 
 def _generate_method_wrappers(cls, path_to_instance):
     for methname, fn in cls.__dict__.items():
-        if callable(fn) and getattr(fn, "_public", False):
+        if callable(fn):
             # Create a wrapper function that looks up this method in the
             # current thread-local context version of this object, and calls
             # it. exec() is a bit ugly but the resulting code is faster and

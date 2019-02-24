@@ -5,15 +5,6 @@ are publicly available in either trio, trio.hazmat, or trio.testing.
 """
 
 
-# Needs to be defined early so it can be imported:
-def _public(fn):
-    # Used to mark methods on _Runner and on IOManager implementations that
-    # should be wrapped as global context-sensitive functions (see the bottom
-    # of _run.py for the wrapper implementation).
-    fn._public = True
-    return fn
-
-
 from ._exceptions import (
     TrioInternalError, RunFinishedError, WouldBlock, Cancelled,
     BusyResourceError, ClosedResourceError, BrokenResourceError, EndOfChannel
