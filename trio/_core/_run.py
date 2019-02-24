@@ -943,29 +943,6 @@ class Runner:
         # for things like functools.partial objects wrapping an async
         # function. So we have to just call it and then check whether the
         # return value is a coroutine object.
-        if not isinstance(coro, collections.abc.Coroutine):
-            # Give good error for: nursery.start_soon(func_returning_future)
-            if _return_value_looks_like_wrong_library(coro):
-                raise TypeError(
-                    "start_soon got unexpected {!r} – are you trying to use a "
-                    "library written for asyncio/twisted/tornado or similar? "
-                    "That won't work without some sort of compatibility shim."
-                    .format(coro)
-                )
-
-            if isasyncgen(coro):
-                raise TypeError(
-                    "start_soon expected an async function but got an async "
-                    "generator {!r}".format(coro)
-                )
-
-            # Give good error for: nursery.start_soon(some_sync_fn)
-            raise TypeError(
-                "trio expected an async function, but {!r} appears to be "
-                "synchronous".format(
-                    getattr(async_fn, "__qualname__", async_fn)
-                )
-            )
 
         ######
         # Set up the Task object
