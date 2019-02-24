@@ -18,7 +18,7 @@ from ._version import __version__
 from ._core import (
     TrioInternalError, RunFinishedError, WouldBlock, Cancelled,
     BusyResourceError, ClosedResourceError, MultiError, run, open_nursery,
-    CancelScope, open_cancel_scope, current_effective_deadline,
+    CancelScope, current_effective_deadline,
     TASK_STATUS_IGNORED, current_time, BrokenResourceError, EndOfChannel
 )
 
@@ -64,8 +64,6 @@ from ._highlevel_ssl_helpers import (
     open_ssl_over_tcp_stream, open_ssl_over_tcp_listeners, serve_ssl_over_tcp
 )
 
-from ._deprecate import TrioDeprecationWarning
-
 # Imported by default
 from . import hazmat
 from . import socket
@@ -73,34 +71,6 @@ from . import abc
 # Not imported by default: testing
 if False:
     from . import testing
-
-from . import _deprecated_ssl_reexports
-from . import _deprecated_subprocess_reexports
-
-_deprecate.enable_attribute_deprecations(__name__)
-__deprecated_attributes__ = {
-    "ssl":
-        _deprecate.DeprecatedAttribute(
-            _deprecated_ssl_reexports,
-            "0.11.0",
-            issue=852,
-            instead=(
-                "trio.SSLStream, trio.SSLListener, trio.NeedHandshakeError, "
-                "and the standard library 'ssl' module (minus SSLSocket and "
-                "wrap_socket())"
-            ),
-        ),
-    "subprocess":
-        _deprecate.DeprecatedAttribute(
-            _deprecated_subprocess_reexports,
-            "0.11.0",
-            issue=852,
-            instead=(
-                "trio.Process and the constants in the standard "
-                "library 'subprocess' module"
-            ),
-        ),
-}
 
 # Having the public path in .__module__ attributes is important for:
 # - exception names in printed tracebacks
@@ -113,8 +83,4 @@ fixup_module_metadata(__name__, globals())
 fixup_module_metadata(hazmat.__name__, hazmat.__dict__)
 fixup_module_metadata(socket.__name__, socket.__dict__)
 fixup_module_metadata(abc.__name__, abc.__dict__)
-fixup_module_metadata(__name__ + ".ssl", _deprecated_ssl_reexports.__dict__)
-fixup_module_metadata(
-    __name__ + ".subprocess", _deprecated_subprocess_reexports.__dict__
-)
 del fixup_module_metadata

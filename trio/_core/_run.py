@@ -39,14 +39,13 @@ from ._traps import (
     WaitTaskRescheduled,
 )
 from .. import _core
-from .._deprecate import deprecated
 
 # At the bottom of this file there's also some "clever" code that generates
 # wrapper functions for runner and io manager methods, and adds them to
 # __all__. These are all re-exported as part of the 'trio' or 'trio.hazmat'
 # namespaces.
 __all__ = [
-    "Task", "run", "open_nursery", "open_cancel_scope", "CancelScope",
+    "Task", "run", "open_nursery", "CancelScope", "os_name",
     "checkpoint", "current_task", "current_effective_deadline",
     "checkpoint_if_cancelled", "TASK_STATUS_IGNORED"
 ]
@@ -378,12 +377,6 @@ class CancelScope:
         with self._might_change_effective_deadline():
             self._remove_task(scope_task)
         return exc
-
-
-@deprecated("0.10.0", issue=607, instead="trio.CancelScope")
-def open_cancel_scope(*, deadline=inf, shield=False):
-    """Returns a context manager which creates a new cancellation scope."""
-    return CancelScope(deadline=deadline, shield=shield)
 
 
 ################################################################
