@@ -235,13 +235,14 @@ def from_stdlib_socket(sock):
     return _SocketType(sock)
 
 
-@_wraps(_stdlib_socket.fromfd, assigned=(), updated=())
-def fromfd(fd, family, type, proto=0):
-    """Like :func:`socket.fromfd`, but returns a trio socket object.
+if hasattr(_stdlib_socket, "fromfd"):
+    @_wraps(_stdlib_socket.fromfd, assigned=(), updated=())
+    def fromfd(fd, family, type, proto=0):
+        """Like :func:`socket.fromfd`, but returns a trio socket object.
 
-    """
-    family, type, proto = _sniff_sockopts_for_fileno(family, type, proto, fd)
-    return from_stdlib_socket(_stdlib_socket.fromfd(fd, family, type, proto))
+        """
+        family, type, proto = _sniff_sockopts_for_fileno(family, type, proto, fd)
+        return from_stdlib_socket(_stdlib_socket.fromfd(fd, family, type, proto))
 
 
 if hasattr(_stdlib_socket, "fromshare"):
@@ -251,14 +252,15 @@ if hasattr(_stdlib_socket, "fromshare"):
         return from_stdlib_socket(_stdlib_socket.fromshare(*args, **kwargs))
 
 
-@_wraps(_stdlib_socket.socketpair, assigned=(), updated=())
-def socketpair(*args, **kwargs):
-    """Like :func:`socket.socketpair`, but returns a pair of trio socket
-    objects.
+if hasattr(_stdlib_socket, "socketpair"):
+    @_wraps(_stdlib_socket.socketpair, assigned=(), updated=())
+    def socketpair(*args, **kwargs):
+        """Like :func:`socket.socketpair`, but returns a pair of trio socket
+        objects.
 
-    """
-    left, right = _stdlib_socket.socketpair(*args, **kwargs)
-    return (from_stdlib_socket(left), from_stdlib_socket(right))
+        """
+        left, right = _stdlib_socket.socketpair(*args, **kwargs)
+        return (from_stdlib_socket(left), from_stdlib_socket(right))
 
 
 @_wraps(_stdlib_socket.socket, assigned=(), updated=())
@@ -678,9 +680,10 @@ class _SocketType(SocketType):
     # recv_into
     ################################################################
 
-    recv_into = _make_simple_sock_method_wrapper(
-        "recv_into", _core.wait_socket_readable
-    )
+    if hasattr(_stdlib_socket.socket, "recv_into"):
+        recv_into = _make_simple_sock_method_wrapper(
+            "recv_into", _core.wait_socket_readable
+        )
 
     ################################################################
     # recvfrom
@@ -694,9 +697,10 @@ class _SocketType(SocketType):
     # recvfrom_into
     ################################################################
 
-    recvfrom_into = _make_simple_sock_method_wrapper(
-        "recvfrom_into", _core.wait_socket_readable
-    )
+    if hasattr(_stdlib_socket.socket, "recvfrom_into"):
+        recvfrom_into = _make_simple_sock_method_wrapper(
+            "recvfrom_into", _core.wait_socket_readable
+        )
 
     ################################################################
     # recvmsg
