@@ -1,7 +1,15 @@
 import functools
 import itertools
 import logging
-import os
+try:
+    import uos
+except ImportError:
+    import os
+else:
+    class os:
+        name = "micro"
+    os = os()
+
 import random
 try:
     import uselect as select
