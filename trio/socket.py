@@ -112,13 +112,13 @@ import socket as _stdlib_socket
 globals().update(
     {
         _name: getattr(_stdlib_socket, _name)
-        for _name in _stdlib_socket.__all__ if _name.isupper()
+        for _name in getattr(_stdlib_socket,'__all__',dir(_stdlib_socket)) if _name.isupper()
     }
 )
 
 # import the overwrites
 from ._socket import (
-    fromfd, from_stdlib_socket, getprotobyname, socketpair, getnameinfo,
+    from_stdlib_socket, getprotobyname, getnameinfo,
     socket, getaddrinfo, set_custom_hostname_resolver,
     set_custom_socket_factory, SocketType
 )
