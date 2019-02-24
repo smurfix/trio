@@ -1,12 +1,11 @@
-from abc import ABCMeta, abstractmethod
-from typing import Generic, TypeVar
+from abc import abstractmethod
 from ._util import aiter_compat
 from . import _core
 
 
 # We use ABCMeta instead of ABC, plus set __slots__=(), so as not to force a
 # __dict__ onto subclasses.
-class Clock(metaclass=ABCMeta):
+class Clock:
     """The interface for custom run loop clocks.
 
     """
@@ -57,7 +56,7 @@ class Clock(metaclass=ABCMeta):
         """
 
 
-class Instrument(metaclass=ABCMeta):
+class Instrument:
     """The interface for run loop instrumentation.
 
     Instruments don't have to inherit from this abstract base class, and all
@@ -138,7 +137,7 @@ class Instrument(metaclass=ABCMeta):
         """
 
 
-class HostnameResolver(metaclass=ABCMeta):
+class HostnameResolver:
     """If you have a custom hostname resolver, then implementing
     :class:`HostnameResolver` allows you to register this to be used by trio.
 
@@ -175,7 +174,7 @@ class HostnameResolver(metaclass=ABCMeta):
         """
 
 
-class SocketFactory(metaclass=ABCMeta):
+class SocketFactory:
     """If you write a custom class implementing the trio socket interface,
     then you can use a :class:`SocketFactory` to get trio to use it.
 
@@ -201,7 +200,7 @@ class SocketFactory(metaclass=ABCMeta):
         """
 
 
-class AsyncResource(metaclass=ABCMeta):
+class AsyncResource:
     """A standard interface for resources that needs to be cleaned up, and
     where that cleanup may require blocking operations.
 
@@ -484,22 +483,7 @@ class HalfCloseableStream(Stream):
         """
 
 
-# The type of object produced by a ReceiveChannel (covariant because
-# ReceiveChannel[Derived] can be passed to someone expecting
-# ReceiveChannel[Base])
-T_co = TypeVar("T_co", covariant=True)
-
-# The type of object accepted by a SendChannel (contravariant because
-# SendChannel[Base] can be passed to someone expecting
-# SendChannel[Derived])
-T_contra = TypeVar("T_contra", contravariant=True)
-
-# The type of object produced by a Listener (covariant plus must be
-# an AsyncResource)
-T_resource = TypeVar("T_resource", bound=AsyncResource, covariant=True)
-
-
-class Listener(AsyncResource, Generic[T_resource]):
+class Listener(AsyncResource):
     """A standard interface for listening for incoming connections.
 
     :class:`Listener` objects also implement the :class:`AsyncResource`
@@ -537,7 +521,7 @@ class Listener(AsyncResource, Generic[T_resource]):
         """
 
 
-class SendChannel(AsyncResource, Generic[T_contra]):
+class SendChannel(AsyncResource):
     """A standard interface for sending Python objects to some receiver.
 
     :class:`SendChannel` objects also implement the :class:`AsyncResource`
@@ -611,7 +595,7 @@ class SendChannel(AsyncResource, Generic[T_contra]):
         """
 
 
-class ReceiveChannel(AsyncResource, Generic[T_co]):
+class ReceiveChannel(AsyncResource):
     """A standard interface for receiving Python objects from some sender.
 
     You can iterate over a :class:`ReceiveChannel` using an ``async for``
