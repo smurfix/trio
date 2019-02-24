@@ -1711,44 +1711,20 @@ async def checkpoint_if_cancelled():
     task._cancel_points += 1
 
 
-_WRAPPER_TEMPLATE = """
-def wrapper(*args, **kwargs):
-    locals()[LOCALS_KEY_KI_PROTECTION_ENABLED] = True
-    try:
-        meth = GLOBAL_RUN_CONTEXT.{}.{}
-    except AttributeError:
-        raise RuntimeError("must be called from async context") from None
-    return meth(*args, **kwargs)
-"""
-
-
-def _generate_method_wrappers(cls, path_to_instance):
-    for methname, fn in cls.__dict__.items():
+def _generate_method_wrappers(cls, instance):
+    for methname in dir(cls):
+        if methname[0] == '_':
+            continue
+        fn = getattr(cls, methname)
         if callable(fn):
-            # Create a wrapper function that looks up this method in the
-            # current thread-local context version of this object, and calls
-            # it. exec() is a bit ugly but the resulting code is faster and
-            # simpler than doing some loop over getattr.
-            ns = {
-                "GLOBAL_RUN_CONTEXT":
-                    GLOBAL_RUN_CONTEXT,
-                "LOCALS_KEY_KI_PROTECTION_ENABLED":
-                    LOCALS_KEY_KI_PROTECTION_ENABLED
-            }
-            exec(_WRAPPER_TEMPLATE.format(path_to_instance, methname), ns)
-            wrapper = ns["wrapper"]
-            # 'fn' is the *unbound* version of the method, but our exported
-            # function has the same API as the *bound* version of the
-            # method. So create a dummy bound method object:
-            from types import MethodType
-            bound_fn = MethodType(fn, object())
-            # Then set exported function's metadata to match it:
-            from functools import update_wrapper
-            update_wrapper(wrapper, bound_fn)
-            # And finally export it:
-            globals()[methname] = wrapper
+            def _calling(methname):
+                def call(*args, **kwargs):
+                    return getattr(instance(), methname)(*args, **kwargs)
+                return call
+
+            globals()[methname] = _calling(methname)
             __all__.append(methname)
 
 
-_generate_method_wrappers(Runner, "runner")
-_generate_method_wrappers(TheIOManager, "runner.io_manager")
+_generate_method_wrappers(Runner, lambda: GLOBAL_RUN_CONTEXT.runner)
+_generate_method_wrappers(TheIOManager, lambda: GLOBAL_RUN_CONTEXT.runner.io_manager)
