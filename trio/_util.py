@@ -186,7 +186,8 @@ def fixup_module_metadata(module_name, namespace):
         if mod is not None and mod.startswith("trio."):
             obj.__module__ = module_name
             if isinstance(obj, type):
-                for attr_value in obj.__dict__.values():
+                for attr in dir(obj):
+                    attr_value = getattr(obj, attr)
                     fix_one(attr_value)
 
     for objname, obj in namespace.items():
