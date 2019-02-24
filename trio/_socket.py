@@ -3,7 +3,7 @@ import sys as _sys
 import socket as _stdlib_socket
 from functools import wraps as _wraps
 
-import idna as _idna
+#import idna as _idna
 
 from . import _core
 from ._threads import run_sync_in_worker_thread
@@ -125,7 +125,7 @@ def set_custom_socket_factory(socket_factory):
 # getaddrinfo and friends
 ################################################################
 
-_NUMERIC_ONLY = _stdlib_socket.AI_NUMERICHOST | _stdlib_socket.AI_NUMERICSERV
+# _NUMERIC_ONLY = _stdlib_socket.AI_NUMERICHOST | _stdlib_socket.AI_NUMERICSERV
 
 
 async def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
@@ -155,7 +155,7 @@ async def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
 
     async with _try_sync(numeric_only_failure):
         return _stdlib_socket.getaddrinfo(
-            host, port, family, type, proto, flags | _NUMERIC_ONLY
+            host, port, family, type, proto, flags # | _NUMERIC_ONLY
         )
     # That failed; it's a real hostname. We better use a thread.
     #
@@ -172,7 +172,7 @@ async def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
             # UTS-46 defines various normalizations; in particular, by default
             # idna.encode will error out if the hostname has Capital Letters
             # in it; with uts46=True it will lowercase them instead.
-            host = _idna.encode(host, uts46=True)
+            raise
     hr = _resolver.get(None)
     if hr is not None:
         return await hr.getaddrinfo(host, port, family, type, proto, flags)
