@@ -58,9 +58,11 @@ class Abort:
 
 
 # Not exported in the trio._core namespace, but imported directly by _run.
-@attr.s(frozen=True)
+#@attr.s(frozen=True, init=False)
 class WaitTaskRescheduled:
-    abort_func = attr.ib()
+    abort_func = None
+    def __init__(self, abort_func):
+        self.abort_func = abort_func
 
 
 async def wait_task_rescheduled(abort_func):
