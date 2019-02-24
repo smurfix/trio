@@ -3,7 +3,10 @@ import itertools
 import logging
 import os
 import random
-import select
+try:
+    import uselect as select
+except ImportError:
+    import select
 import sys
 import threading
 from collections import deque
@@ -52,6 +55,8 @@ GLOBAL_RUN_CONTEXT = threading.local()
 
 if os.name == "nt":
     from ._io_windows import WindowsIOManager as TheIOManager
+elif not hasattr(select, "select"):
+    from ._io_uselect import USelectIOManager as TheIOManager
 elif hasattr(select, "epoll"):
     from ._io_epoll import EpollIOManager as TheIOManager
 elif hasattr(select, "kqueue"):
