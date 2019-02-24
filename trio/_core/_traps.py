@@ -16,9 +16,12 @@ from . import _run
 # inspect.iscoroutinefunction, and it doesn't trigger the unawaited coroutine
 # tracking machinery. Since our traps are public APIs, we make them real async
 # functions, and then this helper takes care of the actual yield:
-@types.coroutine
 def _async_yield(obj):
     return (yield obj)
+try:
+    _async_yield = types.coroutine(_async_yield)
+except AttributeError:
+    pass
 
 
 # This class object is used as a singleton.
