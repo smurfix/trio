@@ -722,7 +722,7 @@ class Task:
         # rescheduling itself (hopefully eventually calling reraise to raise
         # the given exception, but not necessarily).
         success = self._abort_func(raise_cancel)
-        if type(success) is not Abort:
+        if success not in (1, 2):
             raise TrioInternalError("abort function must return Abort enum")
         # We only attempt to abort once per blocking call, regardless of
         # whether we succeeded or failed.

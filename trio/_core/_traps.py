@@ -1,7 +1,6 @@
 # These are the only functions that ever yield back to the task runner.
 
 import types
-import enum
 from functools import wraps
 
 import attr
@@ -45,7 +44,7 @@ async def cancel_shielded_checkpoint():
 
 
 # Return values for abort functions
-class Abort(enum.Enum):
+class Abort:
     """:class:`enum.Enum` used as the return value from abort functions.
 
     See :func:`wait_task_rescheduled` for details.
