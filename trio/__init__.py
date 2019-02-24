@@ -44,13 +44,17 @@ from ._signals import open_signal_receiver
 
 from ._highlevel_socket import SocketStream, SocketListener
 
-from ._file_io import open_file, wrap_file
+import platform
+if platform.python_implementation() != "micro":
 
-from ._path import Path
+    from ._file_io import open_file, wrap_file
 
-from ._subprocess import Process
+    from ._path import Path
 
-from ._ssl import SSLStream, SSLListener, NeedHandshakeError
+    from ._subprocess import Process
+
+    # TODO
+    from ._ssl import SSLStream, SSLListener, NeedHandshakeError
 
 from ._highlevel_serve_listeners import serve_listeners
 
