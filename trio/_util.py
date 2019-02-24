@@ -99,11 +99,12 @@ else:
 # potentially modified threading.
 def is_main_thread():
     """Attempt to reliably check if we are in the main thread."""
-    try:
-        signal.signal(signal.SIGINT, signal.getsignal(signal.SIGINT))
-        return True
-    except ValueError:
-        return False
+    return True
+#   try:
+#       signal.signal(signal.SIGINT, signal.getsignal(signal.SIGINT))
+#       return True
+#   except ValueError:
+#       return False
 
 
 class _ConflictDetectorSync:

@@ -20,8 +20,6 @@ except ImportError:
     inf=9999999
 from time import perf_counter
 
-from sniffio import current_async_library_cvar
-
 import attr
 from async_generator import isasyncgen
 from sortedcontainers import SortedDict
@@ -1360,7 +1358,7 @@ def run(
     instruments = list(instruments)
     io_manager = TheIOManager()
     system_context = copy_context()
-    system_context.run(current_async_library_cvar.set, "trio")
+    # system_context.run(current_async_library_cvar.set, "trio")
     runner = Runner(
         clock=clock,
         instruments=instruments,
