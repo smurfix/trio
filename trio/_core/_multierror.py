@@ -91,8 +91,6 @@ def _filter_impl(handler, root_exc):
         else:
             new_exc = handler(exc)
             # Our version of implicit exception chaining
-            if new_exc is not None and new_exc is not exc:
-                new_exc.__context__ = exc
             return new_exc
 
     preserved = set()

@@ -473,13 +473,7 @@ class NurseryManager:
         else:
             # Copied verbatim from MultiErrorCatcher.  Python doesn't
             # allow us to encapsulate this __context__ fixup.
-            old_context = combined_error_from_nursery.__context__
-            try:
-                raise combined_error_from_nursery
-            finally:
-                _, value, _ = sys.exc_info()
-                assert value is combined_error_from_nursery
-                value.__context__ = old_context
+            raise combined_error_from_nursery
 
     def __enter__(self):
         raise RuntimeError(
