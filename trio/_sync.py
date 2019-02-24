@@ -89,14 +89,12 @@ def async_cm(cls):
     async def __aenter__(self):
         await self.acquire()
 
-    __aenter__.__qualname__ = cls.__qualname__ + ".__aenter__"
     cls.__aenter__ = __aenter__
 
     @_core.enable_ki_protection
     async def __aexit__(self, *args):
         self.release()
 
-    __aexit__.__qualname__ = cls.__qualname__ + ".__aexit__"
     cls.__aexit__ = __aexit__
     return cls
 
