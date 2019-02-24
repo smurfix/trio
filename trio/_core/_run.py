@@ -1389,9 +1389,7 @@ def run(
             except TrioInternalError:
                 raise
             except BaseException as exc:
-                raise TrioInternalError(
-                    "internal error in trio - please file a bug!"
-                ) from exc
+                raise
             finally:
                 GLOBAL_RUN_CONTEXT.__dict__.clear()
             # Inlined copy of runner.main_task_outcome.unwrap() to avoid
@@ -1521,6 +1519,7 @@ def run_impl(runner, async_fn, args):
             except StopIteration as stop_iteration:
                 final_outcome = Value(stop_iteration.value)
             except BaseException as task_exc:
+                raise
                 # Store for later, removing uninteresting top frames: 1 frame
                 # we always remove, because it's this function catching it,
                 # and then in addition we remove however many more Context.run
