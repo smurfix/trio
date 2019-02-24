@@ -4,7 +4,6 @@ import threading
 import attr
 
 from .. import _core
-from ._wakeup_socketpair import WakeupSocketpair
 
 __all__ = ["TrioToken"]
 
@@ -21,7 +20,6 @@ class EntryQueue:
     queue = attr.ib(default=attr.Factory(deque))
     idempotent_queue = attr.ib(default=attr.Factory(dict))
 
-    wakeup = attr.ib(default=attr.Factory(WakeupSocketpair))
     done = attr.ib(default=False)
     # Must be a reentrant lock, because it's acquired from signal handlers.
     # RLock is signal-safe as of cpython 3.2. NB that this does mean that the
@@ -73,7 +71,8 @@ class EntryQueue:
         try:
             while True:
                 run_all_bounded()
-                if not self.queue and not self.idempotent_queue:
+                ## TODO
+                if False: # not self.queue and not self.idempotent_queue:
                     await self.wakeup.wait_woken()
                 else:
                     await _core.checkpoint()
@@ -98,7 +97,7 @@ class EntryQueue:
             assert not self.idempotent_queue
 
     def close(self):
-        self.wakeup.close()
+        pass # self.wakeup.close()
 
     def size(self):
         return len(self.queue) + len(self.idempotent_queue)
@@ -120,7 +119,7 @@ class EntryQueue:
                 self.idempotent_queue[(sync_fn, args)] = None
             else:
                 self.queue.append((sync_fn, args))
-            self.wakeup.wakeup_thread_and_signal_safe()
+            # self.wakeup.wakeup_thread_and_signal_safe()
 
 
 class TrioToken:
