@@ -1,6 +1,9 @@
 import errno
 import sys
-from math import inf
+try:
+    from math import inf
+except ImportError:
+    inf = 999999
 
 import trio
 from . import socket as tsocket

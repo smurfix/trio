@@ -1,5 +1,8 @@
 from collections import deque, OrderedDict
-from math import inf
+try:
+    from math import inf
+except ImportError:
+    inf = 999999
 
 import attr
 from outcome import Error, Value
@@ -57,7 +60,7 @@ def open_memory_channel(max_buffer_size):
       this channel (summing over all clones).
 
     """
-    if max_buffer_size != inf and not isinstance(max_buffer_size, int):
+    if max_buffer_size < inf and not isinstance(max_buffer_size, int):
         raise TypeError("max_buffer_size must be an integer or math.inf")
     if max_buffer_size < 0:
         raise ValueError("max_buffer_size must be >= 0")

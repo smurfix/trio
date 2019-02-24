@@ -14,7 +14,10 @@ import collections.abc
 from contextlib import contextmanager, closing
 
 from contextvars import copy_context
-from math import inf
+try:
+    from math import inf
+except ImportError:
+    inf=9999999
 from time import perf_counter
 
 from sniffio import current_async_library_cvar
@@ -228,7 +231,7 @@ class CancelScope:
 
         if self.cancel_called:
             state = ", cancelled"
-        elif self.deadline == inf:
+        elif self.deadline >= inf:
             state = ""
         else:
             try:
@@ -259,9 +262,9 @@ class CancelScope:
             if old != new:
                 self._effective_deadline = new
                 runner = GLOBAL_RUN_CONTEXT.runner
-                if old != inf:
+                if old < inf:
                     del runner.deadlines[old, id(self)]
-                if new != inf:
+                if new < inf:
                     runner.deadlines[new, id(self)] = self
 
     @property
@@ -829,7 +832,7 @@ class Runner:
             next_deadline, _ = self.deadlines.keys()[0]
             seconds_to_next_deadline = next_deadline - self.current_time()
         else:
-            seconds_to_next_deadline = float("inf")
+            seconds_to_next_deadline = inf
         return _RunStatistics(
             tasks_living=len(self.tasks),
             tasks_runnable=len(self.runq),
