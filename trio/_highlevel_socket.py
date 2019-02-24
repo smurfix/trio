@@ -14,7 +14,7 @@ _closed_stream_errnos = {
     # Unix
     errno.EBADF,
     # Windows
-    errno.ENOTSOCK,
+    errno.ENOTSOCK if hasattr(errno,'ENOTSOCK') else errno.EBADF,
 }
 
 

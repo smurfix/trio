@@ -45,7 +45,7 @@ from .. import _core
 # __all__. These are all re-exported as part of the 'trio' or 'trio.hazmat'
 # namespaces.
 __all__ = [
-    "Task", "run", "open_nursery", "CancelScope", "os_name",
+    "Task", "run", "open_nursery", "CancelScope",
     "checkpoint", "current_task", "current_effective_deadline",
     "checkpoint_if_cancelled", "TASK_STATUS_IGNORED"
 ]
