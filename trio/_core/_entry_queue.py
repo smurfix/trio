@@ -43,7 +43,6 @@ class EntryQueue:
     lock = attr.ib(default=attr.Factory(RLock))
 
     async def task(self):
-        assert _core.currently_ki_protected()
         def run_cb(job):
             # We run this with KI protection enabled; it's the callback's
             # job to disable it if it wants it disabled. Exceptions are

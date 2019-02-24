@@ -114,68 +114,12 @@ def currently_ki_protected():
 
 def _ki_protection_decorator(enabled):
     def decorator(fn):
-        # In some version of Python, isgeneratorfunction returns true for
-        # coroutine functions, so we have to check for coroutine functions
-        # first.
-        if inspect.iscoroutinefunction(fn):
-
-            @wraps(fn)
-            def wrapper(*args, **kwargs):
-                # See the comment for regular generators below
-                coro = fn(*args, **kwargs)
-                coro.cr_frame.f_locals[LOCALS_KEY_KI_PROTECTION_ENABLED
-                                       ] = enabled
-                return coro
-
-            return wrapper
-        elif inspect.isgeneratorfunction(fn):
-
-            @wraps(fn)
-            def wrapper(*args, **kwargs):
-                # It's important that we inject this directly into the
-                # generator's locals, as opposed to setting it here and then
-                # doing 'yield from'. The reason is, if a generator is
-                # throw()n into, then it may magically pop to the top of the
-                # stack. And @contextmanager generators in particular are a
-                # case where we often want KI protection, and which are often
-                # thrown into! See:
-                #     https://bugs.python.org/issue29590
-                gen = fn(*args, **kwargs)
-                gen.gi_frame.f_locals[LOCALS_KEY_KI_PROTECTION_ENABLED
-                                      ] = enabled
-                return gen
-
-            return wrapper
-        elif async_generator.isasyncgenfunction(fn):
-
-            @wraps(fn)
-            def wrapper(*args, **kwargs):
-                # See the comment for regular generators above
-                agen = fn(*args, **kwargs)
-                agen.ag_frame.f_locals[LOCALS_KEY_KI_PROTECTION_ENABLED
-                                       ] = enabled
-                return agen
-
-            return wrapper
-        else:
-
-            @wraps(fn)
-            def wrapper(*args, **kwargs):
-                locals()[LOCALS_KEY_KI_PROTECTION_ENABLED] = enabled
-                return fn(*args, **kwargs)
-
-            return wrapper
-
+        return fn
     return decorator
 
 
 enable_ki_protection = _ki_protection_decorator(True)  # type: Callable[[F], F]
-enable_ki_protection.__name__ = "enable_ki_protection"
-
-disable_ki_protection = _ki_protection_decorator(
-    False
-)  # type: Callable[[F], F]
-disable_ki_protection.__name__ = "disable_ki_protection"
+disable_ki_protection = _ki_protection_decorator(False)
 
 
 @contextmanager

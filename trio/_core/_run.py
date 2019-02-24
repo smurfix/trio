@@ -29,9 +29,7 @@ from outcome import Error, Value, capture
 
 from ._entry_queue import EntryQueue, TrioToken
 from ._exceptions import (TrioInternalError, RunFinishedError, Cancelled)
-from ._ki import (
-    LOCALS_KEY_KI_PROTECTION_ENABLED, ki_manager, enable_ki_protection
-)
+from ._ki import enable_ki_protection
 from ._multierror import MultiError
 from ._traps import (
     Abort,
@@ -1024,9 +1022,9 @@ class Runner:
             context=context,
         )
         self.tasks.add(task)
-        coro.cr_frame.f_locals.setdefault(
-            LOCALS_KEY_KI_PROTECTION_ENABLED, system_task
-        )
+#        coro.cr_frame.f_locals.setdefault(
+#            LOCALS_KEY_KI_PROTECTION_ENABLED, system_task
+#        )
 
         if nursery is not None:
             nursery._children.add(task)
@@ -1404,15 +1402,13 @@ def run(
         system_context=system_context,
     )
     GLOBAL_RUN_CONTEXT.runner = runner
-    locals()[LOCALS_KEY_KI_PROTECTION_ENABLED] = True
+#   locals()[LOCALS_KEY_KI_PROTECTION_ENABLED] = True
 
     # KI handling goes outside the core try/except/finally to avoid a window
     # where KeyboardInterrupt would be allowed and converted into an
     # TrioInternalError:
     try:
-        with ki_manager(
-            runner.deliver_ki, restrict_keyboard_interrupt_to_checkpoints
-        ):
+        if True: # with ki_manager(runner.deliver_ki, restrict_keyboard_interrupt_to_checkpoints):
             try:
                 with closing(runner):
                     # The main reason this is split off into its own function
