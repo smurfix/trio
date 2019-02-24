@@ -1,7 +1,18 @@
 from collections import deque
-import threading
 
 import attr
+
+try:
+    import machine
+    machine.disable_irq
+except (ImportError, AttributeError):
+    from threading import RLock
+else:
+    class RLock:
+        def __enter__(self):
+            self.state = machine.disable_irq()
+        def __exit__(self, *tb):
+            machine.enable_irq(self.state)
 
 from .. import _core
 
@@ -29,19 +40,10 @@ class EntryQueue:
     # main thread -- it just might happen at some inconvenient place. But if
     # you look at the one place where the main thread holds the lock, it's
     # just to make 1 assignment, so that's atomic WRT a signal anyway.
-    lock = attr.ib(default=attr.Factory(threading.RLock))
+    lock = attr.ib(default=attr.Factory(RLock))
 
     async def task(self):
         assert _core.currently_ki_protected()
-        # RLock has two implementations: a signal-safe version in _thread, and
-        # and signal-UNsafe version in threading. We need the signal safe
-        # version. Python 3.2 and later should always use this anyway, but,
-        # since the symptoms if this goes wrong are just "weird rare
-        # deadlocks", then let's make a little check.
-        # See:
-        #     https://bugs.python.org/issue13697#msg237140
-        assert self.lock.__class__.__module__ == "_thread"
-
         def run_cb(job):
             # We run this with KI protection enabled; it's the callback's
             # job to disable it if it wants it disabled. Exceptions are

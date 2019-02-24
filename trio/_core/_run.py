@@ -52,7 +52,9 @@ __all__ = [
     "checkpoint_if_cancelled", "TASK_STATUS_IGNORED"
 ]
 
-GLOBAL_RUN_CONTEXT = threading.local()
+class _Ctx:
+    pass
+GLOBAL_RUN_CONTEXT = _Ctx()
 
 if os.name == "nt":
     from ._io_windows import WindowsIOManager as TheIOManager
