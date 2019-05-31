@@ -272,7 +272,7 @@ async def test_sniff_sockopts():
         for type in [SOCK_DGRAM, SOCK_STREAM]:
             sockets.append(stdlib_socket.socket(family, type))
     for socket in sockets:
-        # regular trio socket constructor
+        # regular Trio socket constructor
         tsocket_socket = tsocket.socket(fileno=socket.fileno())
         # check family / type for correctness:
         assert tsocket_socket.family == socket.family
@@ -471,6 +471,7 @@ async def test_SocketType_resolve(socket_type, addrs):
         async def res(*args):
             return await getattr(sock, resolver)(*args)
 
+        # yapf: disable
         assert await res((addrs.arbitrary,
                           "http")) == (addrs.arbitrary, 80, *addrs.extra)
         if v6:
@@ -485,6 +486,7 @@ async def test_SocketType_resolve(socket_type, addrs):
         # Check the <broadcast> special case, because why not
         assert await res(("<broadcast>",
                           123)) == (addrs.broadcast, 123, *addrs.extra)
+        # yapf: enable
 
         # But not if it's true (at least on systems where getaddrinfo works
         # correctly)
@@ -845,7 +847,7 @@ async def test_custom_hostname_resolver(monkeygai):
     # We can set it back to None
     assert tsocket.set_custom_hostname_resolver(None) is cr
 
-    # And now trio switches back to calling socket.getaddrinfo (specifically
+    # And now Trio switches back to calling socket.getaddrinfo (specifically
     # our monkeypatched version of socket.getaddrinfo)
     monkeygai.set("x", b"host", "port", family=0, type=0, proto=0, flags=0)
     assert await tsocket.getaddrinfo("host", "port") == "x"

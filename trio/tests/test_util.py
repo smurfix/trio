@@ -6,9 +6,10 @@ import sys
 import pytest
 
 from .. import _core
-from .._threads import run_sync_in_worker_thread
+from trio import run_sync_in_worker_thread
 from .._util import (
-    signal_raise, ConflictDetector, fspath, is_main_thread, generic_function
+    signal_raise, ConflictDetector, fspath, is_main_thread, generic_function,
+    Final, NoPublicConstructor
 )
 from ..testing import wait_all_tasks_blocked, assert_checkpoints
 
@@ -98,7 +99,7 @@ class ConcretePathLike(BaseKlass):
         return self.path
 
 
-class TestFspath(object):
+class TestFspath:
 
     # based on:
     # https://github.com/python/cpython/blob/da6c3da6c33c6bf794f741e348b9c6d86cc43ec5/Lib/test/test_os.py#L3527-L3571
@@ -184,3 +185,33 @@ def test_generic_function():
     assert test_func.__qualname__ == "test_generic_function.<locals>.test_func"
     assert test_func.__name__ == "test_func"
     assert test_func.__module__ == __name__
+
+
+def test_final_metaclass():
+    class FinalClass(metaclass=Final):
+        pass
+
+    with pytest.raises(
+        TypeError, match="`FinalClass` does not support subclassing"
+    ):
+
+        class SubClass(FinalClass):
+            pass
+
+
+def test_no_public_constructor_metaclass():
+    class SpecialClass(metaclass=NoPublicConstructor):
+        pass
+
+    with pytest.raises(TypeError, match="no public constructor available"):
+        SpecialClass()
+
+    with pytest.raises(
+        TypeError, match="`SpecialClass` does not support subclassing"
+    ):
+
+        class SubClass(SpecialClass):
+            pass
+
+    # Private constructor should not raise
+    assert isinstance(SpecialClass._create(), SpecialClass)

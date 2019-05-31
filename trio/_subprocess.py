@@ -1,10 +1,7 @@
-import math
 import os
 import select
 import subprocess
-import sys
 
-from . import _core
 from ._abc import AsyncResource
 from ._highlevel_generic import StapledStream
 from ._sync import Lock
@@ -12,6 +9,8 @@ from ._subprocess_platform import (
     wait_child_exiting, create_pipe_to_child_stdin,
     create_pipe_from_child_output
 )
+
+import trio
 
 __all__ = ["Process"]
 
@@ -148,7 +147,7 @@ class Process(AsyncResource):
             # given FD), pass the same thing. If stdout was passed as
             # None, keep stderr as STDOUT to allow subprocess to dup
             # our stdout. Regardless of which of these is applicable,
-            # don't create a new trio stream for stderr -- if stdout
+            # don't create a new Trio stream for stderr -- if stdout
             # is piped, stderr will be intermixed on the stdout stream.
             if stdout is not None:
                 stderr = stdout
@@ -196,7 +195,7 @@ class Process(AsyncResource):
         If cancelled, kills the process and waits for it to finish
         exiting before propagating the cancellation.
         """
-        with _core.CancelScope(shield=True):
+        with trio.CancelScope(shield=True):
             if self.stdin is not None:
                 await self.stdin.aclose()
             if self.stdout is not None:
@@ -208,7 +207,7 @@ class Process(AsyncResource):
         finally:
             if self.returncode is None:
                 self.kill()
-                with _core.CancelScope(shield=True):
+                with trio.CancelScope(shield=True):
                     await self.wait()
 
     async def wait(self):
@@ -226,7 +225,7 @@ class Process(AsyncResource):
                     await wait_child_exiting(self)
                     self._proc.wait()
         else:
-            await _core.checkpoint()
+            await trio.hazmat.checkpoint()
         return self.returncode
 
     def poll(self):

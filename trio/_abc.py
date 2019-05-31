@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from ._util import aiter_compat
-from . import _core
+import trio
 
 
 # We use ABCMeta instead of ABC, plus set __slots__=(), so as not to force a
@@ -139,7 +139,7 @@ class Instrument:
 
 class HostnameResolver:
     """If you have a custom hostname resolver, then implementing
-    :class:`HostnameResolver` allows you to register this to be used by trio.
+    :class:`HostnameResolver` allows you to register this to be used by Trio.
 
     See :func:`trio.socket.set_custom_hostname_resolver`.
 
@@ -175,8 +175,8 @@ class HostnameResolver:
 
 
 class SocketFactory:
-    """If you write a custom class implementing the trio socket interface,
-    then you can use a :class:`SocketFactory` to get trio to use it.
+    """If you write a custom class implementing the Trio socket interface,
+    then you can use a :class:`SocketFactory` to get Trio to use it.
 
     See :func:`trio.socket.set_custom_socket_factory`.
 
@@ -188,13 +188,13 @@ class SocketFactory:
 
         Your socket object must inherit from :class:`trio.socket.SocketType`,
         which is an empty class whose only purpose is to "mark" which classes
-        should be considered valid trio sockets.
+        should be considered valid Trio sockets.
 
         Called by :func:`trio.socket.socket`.
 
         Note that unlike :func:`trio.socket.socket`, this does not take a
         ``fileno=`` argument. If a ``fileno=`` is specified, then
-        :func:`trio.socket.socket` returns a regular trio socket object
+        :func:`trio.socket.socket` returns a regular Trio socket object
         instead of calling this method.
 
         """
@@ -297,7 +297,7 @@ class SendStream(AsyncResource):
               object, or if another task closes this stream object while
               :meth:`send_all` is running.
 
-        Most low-level operations in trio provide a guarantee: if they raise
+        Most low-level operations in Trio provide a guarantee: if they raise
         :exc:`trio.Cancelled`, this means that they had no effect, so the
         system remains in a known state. This is **not true** for
         :meth:`send_all`. If this operation raises :exc:`trio.Cancelled` (or
@@ -455,7 +455,7 @@ class HalfCloseableStream(Stream):
           page <https://linux.die.net/man/2/shutdown>`__).
 
         * The SSH protocol provides the ability to multiplex bidirectional
-          "channels" on top of a single encrypted connection. A trio
+          "channels" on top of a single encrypted connection. A Trio
           implementation of SSH could expose these channels as
           :class:`HalfCloseableStream` objects, and calling :meth:`send_eof`
           would send an ``SSH_MSG_CHANNEL_EOF`` request (see `RFC 4254 §5.3
@@ -673,7 +673,7 @@ class ReceiveChannel(AsyncResource):
         :ref:`channel-mpmc` for examples.
 
         .. warning:: The clones all share the same underlying channel.
-           Whenever a clone :meth:`receive`\s a value, it is removed from the
+           Whenever a clone :meth:`receive`\\s a value, it is removed from the
            channel and the other clones do *not* receive that value. If you
            want to send multiple copies of the same stream of values to
            multiple destinations, like :func:`itertools.tee`, then you need to
@@ -692,5 +692,5 @@ class ReceiveChannel(AsyncResource):
     async def __anext__(self):
         try:
             return await self.receive()
-        except _core.EndOfChannel:
+        except trio.EndOfChannel:
             raise StopAsyncIteration
