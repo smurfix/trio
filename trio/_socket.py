@@ -6,7 +6,6 @@ from functools import wraps as _wraps
 #import idna as _idna
 
 import trio
-from ._threads import run_sync_in_worker_thread
 from ._util import fspath
 from ._core import RunVar, wait_socket_readable, wait_socket_writable
 
@@ -178,15 +177,13 @@ async def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
     if hr is not None:
         return await hr.getaddrinfo(host, port, family, type, proto, flags)
     else:
-        return await run_sync_in_worker_thread(
-            _stdlib_socket.getaddrinfo,
+        return _stdlib_socket.getaddrinfo(
             host,
             port,
             family,
             type,
             proto,
             flags,
-            cancellable=True
         )
 
 
@@ -204,9 +201,7 @@ async def getnameinfo(sockaddr, flags):
     if hr is not None:
         return await hr.getnameinfo(sockaddr, flags)
     else:
-        return await run_sync_in_worker_thread(
-            _stdlib_socket.getnameinfo, sockaddr, flags, cancellable=True
-        )
+        return _stdlib_socket.getnameinfo(sockaddr, flags)
 
 
 async def getprotobyname(name):
@@ -215,9 +210,7 @@ async def getprotobyname(name):
     Like :func:`socket.getprotobyname`, but async.
 
     """
-    return await run_sync_in_worker_thread(
-        _stdlib_socket.getprotobyname, name, cancellable=True
-    )
+    return _stdlib_socket.getprotobyname(name)
 
 
 # obsolete gethostbyname etc. intentionally omitted
@@ -450,19 +443,7 @@ class _SocketType(SocketType):
     async def bind(self, address):
         await trio.hazmat.checkpoint()
         address = await self._resolve_local_address(address)
-        if (
-            hasattr(_stdlib_socket, "AF_UNIX")
-            and self.family == _stdlib_socket.AF_UNIX and address[0]
-        ):
-            # Use a thread for the filesystem traversal (unless it's an
-            # abstract domain socket)
-            return await run_sync_in_worker_thread(self._sock.bind, address)
-        else:
-            # POSIX actually says that bind can return EWOULDBLOCK and
-            # complete asynchronously, like connect. But in practice AFAICT
-            # there aren't yet any real systems that do this, so we'll worry
-            # about it when it happens.
-            return self._sock.bind(address)
+        return self._sock.bind(address)
 
     def shutdown(self, flag):
         # no need to worry about return value b/c always returns None:

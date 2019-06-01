@@ -31,11 +31,6 @@ from ._sync import (
     Event, CapacityLimiter, Semaphore, Lock, StrictFIFOLock, Condition
 )
 
-from ._threads import (
-    run_sync_in_worker_thread, current_default_worker_thread_limiter,
-    BlockingTrioPortal
-)
-
 from ._highlevel_generic import aclose_forcefully, StapledStream
 
 from ._channel import open_memory_channel
