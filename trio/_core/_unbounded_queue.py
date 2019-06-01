@@ -2,7 +2,6 @@ import attr
 
 from .. import _core
 from .._util import aiter_compat
-from .._deprecate import deprecated
 
 __all__ = ["UnboundedQueue"]
 
@@ -43,12 +42,6 @@ class UnboundedQueue:
 
     """
 
-    @deprecated(
-        "0.9.0",
-        issue=497,
-        thing="trio.hazmat.UnboundedQueue",
-        instead="trio.open_memory_channel(math.inf)"
-    )
     def __init__(self):
         self._lot = _core.ParkingLot()
         self._data = []

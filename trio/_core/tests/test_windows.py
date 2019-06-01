@@ -20,9 +20,6 @@ if on_windows:
 # The undocumented API that this is testing should be changed to stop using
 # UnboundedQueue (or just removed until we have time to redo it), but until
 # then we filter out the warning.
-@pytest.mark.filterwarnings(
-    "ignore:.*UnboundedQueue:trio.TrioDeprecationWarning"
-)
 async def test_completion_key_listen():
     async def post(key):
         iocp = ffi.cast("HANDLE", _core.current_iocp())

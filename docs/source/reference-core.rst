@@ -1728,6 +1728,3 @@ Exceptions and warnings
 .. autoexception:: RunFinishedError
 
 .. autoexception:: TrioInternalError
-
-.. autoexception:: TrioDeprecationWarning
-   :show-inheritance:
