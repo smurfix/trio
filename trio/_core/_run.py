@@ -25,7 +25,7 @@ from contextvars import copy_context
 try:
     from math import inf
 except ImportError:
-    inf=9999999
+    inf=999999999999
 from time import perf_counter
 
 import attr
