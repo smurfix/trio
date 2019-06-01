@@ -46,8 +46,6 @@ if platform.python_implementation() != "micro":
 
     from ._path import Path
 
-    from ._subprocess import Process
-
     # TODO
     from ._ssl import SSLStream, SSLListener, NeedHandshakeError
 
