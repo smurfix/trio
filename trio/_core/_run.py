@@ -1386,10 +1386,6 @@ def run(
                     # The main reason this is split off into its own function
                     # is just to get rid of this extra indentation.
                     run_impl(runner, async_fn, args)
-            except TrioInternalError:
-                raise
-            except BaseException as exc:
-                raise 
             finally:
                 GLOBAL_RUN_CONTEXT.__dict__.clear()
             # Inlined copy of runner.main_task_outcome.unwrap() to avoid
