@@ -108,7 +108,6 @@ class SystemClock:
 ################################################################
 
 
-@attr.s(cmp=False, slots=True)
 class CancelStatus:
     """Tracks the cancellation status for a contiguous extent
     of code that will become cancelled, or not, as a unit.
@@ -141,7 +140,7 @@ class CancelStatus:
     # Our associated cancel scope. Can be any object with attributes
     # `deadline`, `shield`, and `cancel_called`, but in current usage
     # is always a CancelScope object. Must not be None.
-    _scope = attr.ib()
+    _scope = None
 
     # True iff the tasks in self._tasks should receive cancellations
     # when they checkpoint. Always True when scope.cancel_called is True;
@@ -151,16 +150,16 @@ class CancelStatus:
     # effectively cancelled due to the cancel scope two levels out
     # becoming cancelled, but then the cancel scope one level out
     # becomes shielded so we're not effectively cancelled anymore.
-    effectively_cancelled = attr.ib(default=False)
+    effectively_cancelled = False
 
     # The CancelStatus whose cancellations can propagate to us; we
     # become effectively cancelled when they do, unless scope.shield
     # is True.  May be None (for the outermost CancelStatus in a call
     # to trio.run(), or briefly during TaskStatus.started()).
-    _parent = attr.ib(default=None, repr=False)
+    _parent = None
 
     # All of the CancelStatuses that have this CancelStatus as their parent.
-    _children = attr.ib(factory=set, init=False, repr=False)
+    _children = None
 
     # Tasks whose cancellation state is currently tied directly to
     # the cancellation state of this CancelStatus object. Don't modify
@@ -168,9 +167,14 @@ class CancelStatus:
     # Invariant: all(task._cancel_status is self for task in self._tasks)
     _tasks = attr.ib(factory=set, init=False, repr=False)
 
-    def __attrs_post_init__(self):
-        if self._parent is not None:
-            self._parent._children.add(self)
+    def __init__(self, parent, scope):
+        self._parent = parent
+        self._scope = scope
+        self._tasks = set()
+        self._children = set()
+
+        if parent is not None:
+            parent._children.add(self)
             self.recalculate()
 
     # parent/children/tasks accessors are used by TaskStatus.started()
@@ -228,7 +232,6 @@ class CancelStatus:
         return min(self._scope.deadline, self._parent.effective_deadline())
 
 
-@attr.s(cmp=False, repr=False, slots=True)
 class CancelScope:
     """A *cancellation scope*: the link between a unit of cancellable
     work and Trio's cancellation system.
@@ -268,15 +271,16 @@ class CancelScope:
     has been entered yet, and changes take immediate effect.
     """
 
-    _cancel_status = attr.ib(default=None, init=False)
-    _has_been_entered = attr.ib(default=False, init=False)
-    _registered_deadline = attr.ib(default=inf, init=False)
-    _cancel_called = attr.ib(default=False, init=False)
-    cancelled_caught = attr.ib(default=False, init=False)
+    _cancel_status = None
+    _has_been_entered = False
+    _registered_deadline = inf
+    _cancel_called = False
+    cancelled_caught = False
 
     # Constructor arguments:
-    _deadline = attr.ib(default=inf, kw_only=True)
-    _shield = attr.ib(default=False, kw_only=True)
+    def __init__(self, deadline=inf, shield=False):
+        self._deadline = deadline
+        self._shield = shield
 
     def __enter__(self):
         task = _core.current_task()
@@ -697,7 +701,7 @@ class Nursery:
         try:
             self._pending_starts += 1
             async with open_nursery() as old_nursery:
-                task_status = _TaskStatus(old_nursery, self)
+                task_status = _TaskStatus(old_nursery=old_nursery, new_nursery=self)
                 thunk = functools.partial(async_fn, task_status=task_status)
                 old_nursery.start_soon(thunk, *args, name=name)
                 # Wait for either _TaskStatus.started or an exception to
