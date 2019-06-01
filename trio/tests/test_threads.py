@@ -40,21 +40,18 @@ async def test_do_in_trio_thread():
     portal = BlockingTrioPortal()
 
     def f(record):
-        assert not _core.currently_ki_protected()
         record.append(("f", threading.current_thread()))
         return 2
 
     await check_case(portal.run_sync, f, ("got", 2))
 
     def f(record):
-        assert not _core.currently_ki_protected()
         record.append(("f", threading.current_thread()))
         raise ValueError
 
     await check_case(portal.run_sync, f, ("error", ValueError))
 
     async def f(record):
-        assert not _core.currently_ki_protected()
         await _core.checkpoint()
         record.append(("f", threading.current_thread()))
         return 3
@@ -62,7 +59,6 @@ async def test_do_in_trio_thread():
     await check_case(portal.run, f, ("got", 3))
 
     async def f(record):
-        assert not _core.currently_ki_protected()
         await _core.checkpoint()
         record.append(("f", threading.current_thread()))
         raise KeyError
@@ -106,7 +102,6 @@ def test_run_in_trio_thread_ki():
 
         def trio_thread_fn():
             print("in Trio thread")
-            assert not _core.currently_ki_protected()
             print("ki_self")
             try:
                 ki_self()

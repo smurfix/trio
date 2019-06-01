@@ -11,7 +11,6 @@ from .abc import SendChannel, ReceiveChannel
 from ._util import generic_function
 
 import trio
-from ._core import enable_ki_protection
 
 
 @generic_function
@@ -126,7 +125,6 @@ class MemorySendChannel(SendChannel):
         # XX should we also report statistics specific to this object?
         return self._state.statistics()
 
-    @enable_ki_protection
     def send_nowait(self, value):
         if self._closed:
             raise trio.ClosedResourceError
@@ -142,7 +140,6 @@ class MemorySendChannel(SendChannel):
         else:
             raise trio.WouldBlock
 
-    @enable_ki_protection
     async def send(self, value):
         await trio.hazmat.checkpoint_if_cancelled()
         try:
@@ -165,13 +162,11 @@ class MemorySendChannel(SendChannel):
 
         await trio.hazmat.wait_task_rescheduled(abort_fn)
 
-    @enable_ki_protection
     def clone(self):
         if self._closed:
             raise trio.ClosedResourceError
         return MemorySendChannel(self._state)
 
-    @enable_ki_protection
     async def aclose(self):
         if self._closed:
             await trio.hazmat.checkpoint()
@@ -208,7 +203,6 @@ class MemoryReceiveChannel(ReceiveChannel):
             id(self), id(self._state)
         )
 
-    @enable_ki_protection
     def receive_nowait(self):
         if self._closed:
             raise trio.ClosedResourceError
@@ -224,7 +218,6 @@ class MemoryReceiveChannel(ReceiveChannel):
             raise trio.EndOfChannel
         raise trio.WouldBlock
 
-    @enable_ki_protection
     async def receive(self):
         await trio.hazmat.checkpoint_if_cancelled()
         try:
@@ -247,13 +240,11 @@ class MemoryReceiveChannel(ReceiveChannel):
 
         return await trio.hazmat.wait_task_rescheduled(abort_fn)
 
-    @enable_ki_protection
     def clone(self):
         if self._closed:
             raise trio.ClosedResourceError
         return MemoryReceiveChannel(self._state)
 
-    @enable_ki_protection
     async def aclose(self):
         if self._closed:
             await trio.hazmat.checkpoint()

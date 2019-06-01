@@ -50,8 +50,7 @@ class EntryQueue:
 
     async def task(self):
         def run_cb(job):
-            # We run this with KI protection enabled; it's the callback's
-            # job to disable it if it wants it disabled. Exceptions are
+            # Exceptions are
             # treated like system task exceptions (i.e., converted into
             # TrioInternalError and cause everything to shut down).
             sync_fn, args = job
@@ -166,11 +165,6 @@ class TrioToken:
         The call is effectively run as part of a system task (see
         :func:`~trio.hazmat.spawn_system_task`). In particular this means
         that:
-
-        * :exc:`KeyboardInterrupt` protection is *enabled* by default; if
-          you want ``sync_fn`` to be interruptible by control-C, then you
-          need to use :func:`~trio.hazmat.disable_ki_protection`
-          explicitly.
 
         * If ``sync_fn`` raises an exception, then it's converted into a
           :exc:`~trio.TrioInternalError` and *all* tasks are cancelled. You

@@ -12,10 +12,6 @@ from ._exceptions import (
 
 from ._multierror import MultiError
 
-from ._ki import (
-    enable_ki_protection, disable_ki_protection, currently_ki_protected
-)
-
 # TODO:  make the _run namespace a lot less magical
 from ._run import *
 

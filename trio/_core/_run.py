@@ -35,7 +35,6 @@ from outcome import Error, Value, capture
 
 from ._entry_queue import EntryQueue, TrioToken
 from ._exceptions import (TrioInternalError, RunFinishedError, Cancelled)
-from ._ki import enable_ki_protection
 from ._multierror import MultiError
 from ._traps import (
     Abort,
@@ -280,7 +279,6 @@ class CancelScope(metaclass=Final):
     _deadline = attr.ib(default=inf, kw_only=True)
     _shield = attr.ib(default=False, kw_only=True)
 
-    @enable_ki_protection
     def __enter__(self):
         task = _core.current_task()
         if self._has_been_entered:
@@ -316,7 +314,6 @@ class CancelScope(metaclass=Final):
             self._cancel_status = None
         return exc
 
-    @enable_ki_protection
     def __exit__(self, etype, exc, tb):
         # NB: NurseryManager calls _close() directly rather than __exit__(),
         # so __exit__() must be just _close() plus this logic for adapting
@@ -368,7 +365,6 @@ class CancelScope(metaclass=Final):
         )
 
     @contextmanager
-    @enable_ki_protection
     def _might_change_registered_deadline(self):
         try:
             yield
@@ -442,7 +438,6 @@ class CancelScope(metaclass=Final):
         return self._shield
 
     @shield.setter
-    @enable_ki_protection
     def shield(self, new_value):
         if not isinstance(new_value, bool):
             raise TypeError("shield must be a bool")
@@ -450,7 +445,6 @@ class CancelScope(metaclass=Final):
         if self._cancel_status is not None:
             self._cancel_status.recalculate()
 
-    @enable_ki_protection
     def cancel(self):
         """Cancels this scope immediately.
 
@@ -576,14 +570,12 @@ class NurseryManager:
 
     """
 
-    @enable_ki_protection
     async def __aenter__(self):
         self._scope = CancelScope()
         self._scope.__enter__()
         self._nursery = Nursery(current_task(), self._scope)
         return self._nursery
 
-    @enable_ki_protection
     async def __aexit__(self, etype, exc, tb):
         new_exc = await self._nursery._nested_child_finished(exc)
         # Tracebacks show the 'raise' line below out of context, so let's give
@@ -821,18 +813,7 @@ class Task:
             return
 
         def raise_cancel():
-            raise Cancelled._create()
-
-        self._attempt_abort(raise_cancel)
-
-    def _attempt_delivery_of_pending_ki(self):
-        assert self._runner.ki_pending
-        if self._abort_func is None:
-            return
-
-        def raise_cancel():
-            self._runner.ki_pending = False
-            raise KeyboardInterrupt
+            raise Cancelled()
 
         self._attempt_abort(raise_cancel)
 
@@ -1162,13 +1143,6 @@ class Runner:
 
         * System tasks are automatically cancelled when the main task exits.
 
-        * By default, system tasks have :exc:`KeyboardInterrupt` protection
-          *enabled*. If you want your task to be interruptible by control-C,
-          then you need to use :func:`disable_ki_protection` explicitly (and
-          come up with some plan for what to do with a
-          :exc:`KeyboardInterrupt`, given that system tasks aren't allowed to
-          raise exceptions).
-
         * System tasks do not inherit context variables from their creator.
 
         Args:
@@ -1215,39 +1189,6 @@ class Runner:
         if self.trio_token is None:
             self.trio_token = TrioToken(self.entry_queue)
         return self.trio_token
-
-    ################
-    # KI handling
-    ################
-
-    ki_pending = attr.ib(default=False)
-
-    # deliver_ki is broke. Maybe move all the actual logic and state into
-    # RunToken, and we'll only have one instance per runner? But then we can't
-    # have a public constructor. Eh, but current_run_token() returning a
-    # unique object per run feels pretty nice. Maybe let's just go for it. And
-    # keep the class public so people can isinstance() it if they want.
-
-    # This gets called from signal context
-    def deliver_ki(self):
-        self.ki_pending = True
-        try:
-            self.entry_queue.run_sync_soon(self._deliver_ki_cb)
-        except RunFinishedError:
-            pass
-
-    def _deliver_ki_cb(self):
-        if not self.ki_pending:
-            return
-        # Can't happen because main_task and run_sync_soon_task are created at
-        # the same time -- so even if KI arrives before main_task is created,
-        # we won't get here until afterwards.
-        assert self.main_task is not None
-        if self.main_task_outcome is not None:
-            # We're already in the process of exiting -- leave ki_pending set
-            # and we'll check it again on our way out of run().
-            return
-        self.main_task._attempt_delivery_of_pending_ki()
 
     ################
     # Quiescing
@@ -1390,7 +1331,6 @@ def run(
     *args,
     clock=None,
     instruments=(),
-    restrict_keyboard_interrupt_to_checkpoints=False
 ):
     """Run a Trio-flavored async function, and return the result.
 
@@ -1422,30 +1362,6 @@ def run(
       instruments (list of :class:`trio.abc.Instrument` objects): Any
           instrumentation you want to apply to this run. This can also be
           modified during the run; see :ref:`instrumentation`.
-
-      restrict_keyboard_interrupt_to_checkpoints (bool): What happens if the
-          user hits control-C while :func:`run` is running? If this argument
-          is False (the default), then you get the standard Python behavior: a
-          :exc:`KeyboardInterrupt` exception will immediately interrupt
-          whatever task is running (or if no task is running, then Trio will
-          wake up a task to be interrupted). Alternatively, if you set this
-          argument to True, then :exc:`KeyboardInterrupt` delivery will be
-          delayed: it will be *only* be raised at :ref:`checkpoints
-          <checkpoints>`, like a :exc:`Cancelled` exception.
-
-          The default behavior is nice because it means that even if you
-          accidentally write an infinite loop that never executes any
-          checkpoints, then you can still break out of it using control-C.
-          The alternative behavior is nice if you're paranoid about a
-          :exc:`KeyboardInterrupt` at just the wrong place leaving your
-          program in an inconsistent state, because it means that you only
-          have to worry about :exc:`KeyboardInterrupt` at the exact same
-          places where you already have to worry about :exc:`Cancelled`.
-
-          This setting has no effect if your program has registered a custom
-          SIGINT handler, or if :func:`run` is called from anywhere but the
-          main thread (this is a Python limitation), or if you use
-          :func:`open_signal_receiver` to catch SIGINT.
 
     Returns:
       Whatever ``async_fn`` returns.
@@ -1486,9 +1402,6 @@ def run(
     GLOBAL_RUN_CONTEXT.runner = runner
 #   locals()[LOCALS_KEY_KI_PROTECTION_ENABLED] = True
 
-    # KI handling goes outside the core try/except/finally to avoid a window
-    # where KeyboardInterrupt would be allowed and converted into an
-    # TrioInternalError:
     try:
         if True: # with ki_manager(runner.deliver_ki, restrict_keyboard_interrupt_to_checkpoints):
             try:
@@ -1499,9 +1412,7 @@ def run(
             except TrioInternalError:
                 raise
             except BaseException as exc:
-                raise TrioInternalError(
-                    "internal error in Trio - please file a bug!"
-                ) from exc
+                raise 
             finally:
                 GLOBAL_RUN_CONTEXT.__dict__.clear()
             # Inlined copy of runner.main_task_outcome.unwrap() to avoid
@@ -1511,11 +1422,7 @@ def run(
             else:
                 raise runner.main_task_outcome.error
     finally:
-        # To guarantee that we never swallow a KeyboardInterrupt, we have to
-        # check for pending ones once more after leaving the context manager:
-        if runner.ki_pending:
-            # Implicitly chains with any exception from outcome.unwrap():
-            raise KeyboardInterrupt
+        pass
 
 
 # 24 hours is arbitrary, but it avoids issues like people setting timeouts of
@@ -1652,8 +1559,6 @@ def run_impl(runner, async_fn, args):
                     task._abort_func = msg.abort_func
                     # KI is "outside" all cancel scopes, so check for it
                     # before checking for regular cancellation:
-                    if runner.ki_pending and task is runner.main_task:
-                        task._attempt_delivery_of_pending_ki()
                     task._attempt_delivery_of_any_pending_cancel()
                 elif type(msg) is PermanentlyDetachCoroutineObject:
                     # Pretend the task just exited with the given outcome
@@ -1772,10 +1677,7 @@ async def checkpoint_if_cancelled():
 
     """
     task = current_task()
-    if (
-        task._cancel_status.effectively_cancelled or
-        (task is task._runner.main_task and task._runner.ki_pending)
-    ):
+    if task._cancel_status.effectively_cancelled:
         await _core.checkpoint()
         assert False  # pragma: no cover
     task._cancel_points += 1

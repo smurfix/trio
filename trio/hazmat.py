@@ -13,7 +13,7 @@ import sys
 # Generally available symbols
 from ._core import (
     cancel_shielded_checkpoint, Abort, wait_task_rescheduled,
-    enable_ki_protection, disable_ki_protection, currently_ki_protected, Task,
+    Task,
     checkpoint, current_task, ParkingLot, RunVar, TrioToken,
     current_trio_token, temporarily_detach_coroutine_object,
     permanently_detach_coroutine_object, reattach_detached_coroutine_object,

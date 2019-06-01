@@ -1017,12 +1017,11 @@ async def test_spawn_system_task():
 
     async def system_task(x):
         record.append(("x", x))
-        record.append(("ki", _core.currently_ki_protected()))
         await _core.checkpoint()
 
     _core.spawn_system_task(system_task, 1)
     await wait_all_tasks_blocked()
-    assert record == [("x", 1), ("ki", True)]
+    assert record == [("x", 1)]
 
 
 # intentionally make a system task crash

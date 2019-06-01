@@ -6,7 +6,7 @@ import outcome
 import trio
 
 from ._util import aiter_compat
-from ._core import enable_ki_protection, ParkingLot
+from ._core import ParkingLot
 
 __all__ = [
     "Event",
@@ -47,7 +47,6 @@ class Event:
         """
         return self._flag
 
-    @enable_ki_protection
     def set(self):
         """Set the internal flag value to True, and wake any waiting tasks.
 
@@ -85,13 +84,11 @@ class Event:
 
 
 def async_cm(cls):
-    @enable_ki_protection
     async def __aenter__(self):
         await self.acquire()
 
     cls.__aenter__ = __aenter__
 
-    @enable_ki_protection
     async def __aexit__(self, *args):
         self.release()
 
@@ -224,7 +221,6 @@ class CapacityLimiter:
         """
         return self.total_tokens - self.borrowed_tokens
 
-    @enable_ki_protection
     def acquire_nowait(self):
         """Borrow a token from the sack, without blocking.
 
@@ -236,7 +232,6 @@ class CapacityLimiter:
         """
         self.acquire_on_behalf_of_nowait(trio.hazmat.current_task())
 
-    @enable_ki_protection
     def acquire_on_behalf_of_nowait(self, borrower):
         """Borrow a token from the sack on behalf of ``borrower``, without
         blocking.
@@ -265,7 +260,6 @@ class CapacityLimiter:
         else:
             raise trio.WouldBlock
 
-    @enable_ki_protection
     async def acquire(self):
         """Borrow a token from the sack, blocking if necessary.
 
@@ -276,7 +270,6 @@ class CapacityLimiter:
         """
         await self.acquire_on_behalf_of(trio.hazmat.current_task())
 
-    @enable_ki_protection
     async def acquire_on_behalf_of(self, borrower):
         """Borrow a token from the sack on behalf of ``borrower``, blocking if
         necessary.
@@ -308,7 +301,6 @@ class CapacityLimiter:
         else:
             await trio.hazmat.cancel_shielded_checkpoint()
 
-    @enable_ki_protection
     def release(self):
         """Put a token back into the sack.
 
@@ -319,7 +311,6 @@ class CapacityLimiter:
         """
         self.release_on_behalf_of(trio.hazmat.current_task())
 
-    @enable_ki_protection
     def release_on_behalf_of(self, borrower):
         """Put a token back into the sack on behalf of ``borrower``.
 
@@ -434,7 +425,6 @@ class Semaphore:
         """
         return self._max_value
 
-    @enable_ki_protection
     def acquire_nowait(self):
         """Attempt to decrement the semaphore value, without blocking.
 
@@ -448,7 +438,6 @@ class Semaphore:
         else:
             raise trio.WouldBlock
 
-    @enable_ki_protection
     async def acquire(self):
         """Decrement the semaphore value, blocking if necessary to avoid
         letting it drop below zero.
@@ -462,7 +451,6 @@ class Semaphore:
         else:
             await trio.hazmat.cancel_shielded_checkpoint()
 
-    @enable_ki_protection
     def release(self):
         """Increment the semaphore value, possibly waking a task blocked in
         :meth:`acquire`.
@@ -539,7 +527,6 @@ class Lock:
         """
         return self._owner is not None
 
-    @enable_ki_protection
     def acquire_nowait(self):
         """Attempt to acquire the lock, without blocking.
 
@@ -557,7 +544,6 @@ class Lock:
         else:
             raise trio.WouldBlock
 
-    @enable_ki_protection
     async def acquire(self):
         """Acquire the lock, blocking if necessary.
 
@@ -573,7 +559,6 @@ class Lock:
         else:
             await trio.hazmat.cancel_shielded_checkpoint()
 
-    @enable_ki_protection
     def release(self):
         """Release the lock.
 
@@ -731,7 +716,6 @@ class Condition:
         """
         self._lock.release()
 
-    @enable_ki_protection
     async def wait(self):
         """Wait for another thread to call :meth:`notify` or
         :meth:`notify_all`.

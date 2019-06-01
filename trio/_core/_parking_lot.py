@@ -120,7 +120,6 @@ class ParkingLot:
     # if we ever add the ability to repark while one's resuming place in
     # line (for false wakeups), then we could have it return a ticket that
     # abstracts the "place in line" concept.
-    @_core.enable_ki_protection
     async def park(self):
         """Park the current task until woken by a call to :meth:`unpark` or
         :meth:`unpark_all`.
@@ -141,7 +140,6 @@ class ParkingLot:
             task, _ = self._parked.popitem(last=False)
             yield task
 
-    @_core.enable_ki_protection
     def unpark(self, *, count=1):
         """Unpark one or more tasks.
 
@@ -164,7 +162,6 @@ class ParkingLot:
         """
         return self.unpark(count=len(self))
 
-    @_core.enable_ki_protection
     def repark(self, new_lot, *, count=1):
         """Move parked tasks from one :class:`ParkingLot` object to another.
 

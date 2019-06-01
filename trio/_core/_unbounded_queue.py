@@ -73,7 +73,6 @@ class UnboundedQueue:
         """
         return not self._data
 
-    @_core.enable_ki_protection
     def put_nowait(self, obj):
         """Put an object into the queue, without blocking.
 

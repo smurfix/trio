@@ -8,7 +8,7 @@ import outcome
 import trio
 
 from ._sync import CapacityLimiter
-from ._core import enable_ki_protection, disable_ki_protection, RunVar
+from ._core import RunVar
 
 __all__ = [
     "run_sync_in_worker_thread",
@@ -56,7 +56,6 @@ class BlockingTrioPortal:
 
     # This is the part that runs in the Trio thread
     def _run_cb(self, q, afn, args):
-        @disable_ki_protection
         async def unprotected_afn():
             return await afn(*args)
 
@@ -67,7 +66,6 @@ class BlockingTrioPortal:
 
     # This is the part that runs in the Trio thread
     def _run_sync_cb(self, q, fn, args):
-        @disable_ki_protection
         def unprotected_fn():
             return fn(*args)
 
@@ -255,7 +253,6 @@ class ThreadPlaceholder:
     name = attr.ib()
 
 
-@enable_ki_protection
 async def run_sync_in_worker_thread(
     sync_fn, *args, cancellable=False, limiter=None
 ):
