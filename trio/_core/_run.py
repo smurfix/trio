@@ -1590,7 +1590,7 @@ def current_task():
     try:
         return GLOBAL_RUN_CONTEXT.task
     except AttributeError:
-        raise RuntimeError("must be called from async context") from None
+        raise RuntimeError("must be called from async context")
 
 
 def current_effective_deadline():
