@@ -65,7 +65,7 @@ class USelectIOManager:
     def handle_io(self, timeout):
         # max_events must be > 0 or poll gets cranky
         max_events = max(1, len(self._registered))
-        events = self._poll.poll(timeout, max_events)
+        events = self._poll.poll(int(timeout/1000), max_events)
         for fd, flags in events:
             waiters = self._registered[fd]
             # Clever hack stolen from selectors.EpollSelector: an event
