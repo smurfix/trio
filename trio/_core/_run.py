@@ -45,7 +45,6 @@ from ._traps import (
 )
 from .. import _core
 from .._deprecate import deprecated
-from .._util import Final
 
 # At the bottom of this file there's also some "clever" code that generates
 # wrapper functions for runner and io manager methods, and adds them to
@@ -230,7 +229,7 @@ class CancelStatus:
 
 
 @attr.s(cmp=False, repr=False, slots=True)
-class CancelScope(metaclass=Final):
+class CancelScope:
     """A *cancellation scope*: the link between a unit of cancellable
     work and Trio's cancellation system.
 

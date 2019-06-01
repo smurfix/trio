@@ -1,7 +1,5 @@
 import attr
 
-from trio._util import NoPublicConstructor
-
 
 class TrioInternalError(Exception):
     """Raised by :func:`run` if we encounter a bug in Trio, or (possibly) a
@@ -30,7 +28,7 @@ class WouldBlock(Exception):
     """
 
 
-class Cancelled(BaseException, metaclass=NoPublicConstructor):
+class Cancelled(BaseException):
     """Raised by blocking calls if the surrounding scope has been cancelled.
 
     You should let this exception propagate, to be caught by the relevant
