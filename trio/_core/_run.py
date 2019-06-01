@@ -1026,10 +1026,7 @@ class Runner:
             # Give good error for: nursery.start_soon(future)
             if _return_value_looks_like_wrong_library(async_fn):
                 raise TypeError(
-                    "Trio was expecting an async function, but instead it got "
-                    "{!r} – are you trying to use a library written for "
-                    "asyncio/twisted/tornado or similar? That won't work "
-                    "without some sort of compatibility shim."
+                    "Expected an async function, got {!r}"
                     .format(async_fn)
                 ) from None
 
