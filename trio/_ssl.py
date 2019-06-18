@@ -103,7 +103,7 @@
 # write it needs to skip the first 1024 bytes or whatever it is. (Well,
 # technically, we're actually allowed to call 'write' again with a data buffer
 # which is the same as our old one PLUS some extra stuff added onto the end,
-# but in trio that never comes up so never mind.)
+# but in Trio that never comes up so never mind.)
 #
 # There are some people online who claim that once you've gotten a Want*Error
 # then the *very next call* you make to openssl *must* be the same as the
@@ -128,7 +128,7 @@
 # the outgoing BIO to the wire, reading data from the wire to the incoming
 # BIO, retrying an I/O call until it works, and synchronizing with other tasks
 # that might be calling _retry concurrently. Basically it takes an SSLObject
-# non-blocking in-memory method and converts it into a trio async blocking
+# non-blocking in-memory method and converts it into a Trio async blocking
 # method. _retry is only about 30 lines of code, but all these cases
 # multiplied by concurrent calls make it extremely tricky, so there are lots
 # of comments down below on the details, and a really extensive test suite in
@@ -147,13 +147,14 @@
 # XX document behavior on cancellation/error (i.e.: all is lost abandon
 # stream)
 # docs will need to make very clear that this is different from all the other
-# cancellations in core trio
+# cancellations in core Trio
 
 import operator as _operator
 import ssl as _stdlib_ssl
 from enum import Enum as _Enum
 
-from . import _core
+import trio
+
 from .abc import Stream, Listener
 from ._highlevel_generic import aclose_forcefully
 from . import _sync
@@ -397,18 +398,18 @@ class SSLStream(Stream):
         if self._state is _State.OK:
             return
         elif self._state is _State.BROKEN:
-            raise _core.BrokenResourceError
+            raise trio.BrokenResourceError
         elif self._state is _State.CLOSED:
-            raise _core.ClosedResourceError
+            raise trio.ClosedResourceError
         else:  # pragma: no cover
             assert False
 
-    # This is probably the single trickiest function in trio. It has lots of
+    # This is probably the single trickiest function in Trio. It has lots of
     # comments, though, just make sure to think carefully if you ever have to
     # touch it. The big comment at the top of this file will help explain
     # too.
     async def _retry(self, fn, *args, ignore_want_read=False):
-        await _core.checkpoint_if_cancelled()
+        await trio.hazmat.checkpoint_if_cancelled()
         yielded = False
         try:
             finished = False
@@ -447,7 +448,7 @@ class SSLStream(Stream):
                     _stdlib_ssl.SSLError, _stdlib_ssl.CertificateError
                 ) as exc:
                     self._state = _State.BROKEN
-                    raise _core.BrokenResourceError from exc
+                    raise trio.BrokenResourceError from exc
                 else:
                     finished = True
                 if ignore_want_read:
@@ -549,7 +550,7 @@ class SSLStream(Stream):
             return ret
         finally:
             if not yielded:
-                await _core.cancel_shielded_checkpoint()
+                await trio.hazmat.cancel_shielded_checkpoint()
 
     async def _do_handshake(self):
         try:
@@ -585,7 +586,7 @@ class SSLStream(Stream):
         try:
             self._check_status()
         except:
-            await _core.checkpoint()
+            await trio.hazmat.checkpoint()
             raise
         await self._handshook.ensure(checkpoint=True)
 
@@ -614,7 +615,7 @@ class SSLStream(Stream):
             self._check_status()
             try:
                 await self._handshook.ensure(checkpoint=False)
-            except _core.BrokenResourceError as exc:
+            except trio.BrokenResourceError as exc:
                 # For some reason, EOF before handshake sometimes raises
                 # SSLSyscallError instead of SSLEOFError (e.g. on my linux
                 # laptop, but not on appveyor). Thanks openssl.
@@ -632,7 +633,7 @@ class SSLStream(Stream):
                 raise ValueError("max_bytes must be >= 1")
             try:
                 return await self._retry(self._ssl_object.read, max_bytes)
-            except _core.BrokenResourceError as exc:
+            except trio.BrokenResourceError as exc:
                 # This isn't quite equivalent to just returning b"" in the
                 # first place, because we still end up with self._state set to
                 # BROKEN. But that's actually fine, because after getting an
@@ -663,7 +664,7 @@ class SSLStream(Stream):
             # SSLObject interprets write(b"") as an EOF for some reason, which
             # is not what we want.
             if not data:
-                await _core.checkpoint()
+                await trio.hazmat.checkpoint()
                 return
             await self._retry(self._ssl_object.write, data)
 
@@ -707,7 +708,7 @@ class SSLStream(Stream):
 
         """
         if self._state is _State.CLOSED:
-            await _core.checkpoint()
+            await trio.hazmat.checkpoint()
             return
         if self._state is _State.BROKEN or self._https_compatible:
             self._state = _State.CLOSED
@@ -748,7 +749,7 @@ class SSLStream(Stream):
             # close_notify and closed their connection then it's possible that
             # our attempt to send close_notify will raise
             # BrokenResourceError. This is totally legal, and in fact can happen
-            # with two well-behaved trio programs talking to each other, so we
+            # with two well-behaved Trio programs talking to each other, so we
             # don't want to raise an error. So we suppress BrokenResourceError
             # here. (This is safe, because literally the only thing this call
             # to _retry will do is send the close_notify alert, so that's
@@ -771,7 +772,7 @@ class SSLStream(Stream):
                 await self._retry(
                     self._ssl_object.unwrap, ignore_want_read=True
                 )
-            except (_core.BrokenResourceError, _core.BusyResourceError):
+            except (trio.BrokenResourceError, trio.BusyResourceError):
                 pass
         except:
             # Failure! Kill the stream and move on.
@@ -789,7 +790,7 @@ class SSLStream(Stream):
         """
         # This method's implementation is deceptively simple.
         #
-        # First, we take the outer send lock, because of trio's standard
+        # First, we take the outer send lock, because of Trio's standard
         # semantics that wait_send_all_might_not_block and send_all
         # conflict. This also takes care of providing correct checkpoint
         # semantics before we potentially error out from _check_status().

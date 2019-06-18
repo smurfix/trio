@@ -69,7 +69,7 @@ if [ "$PYPY_NIGHTLY_BRANCH" != "" ]; then
         # server returns 4xx or 5xx")
         # - nonetheless, pypy.tar.bz2 does not exist, or contains no data
         # This isn't going to work, and the failure is not informative of
-        # anything involving trio.
+        # anything involving Trio.
         ls -l
         echo "PyPy3 nightly build failed to download – something is wrong on their end."
         echo "Skipping testing against the nightly build for right now."
@@ -102,7 +102,7 @@ python setup.py sdist --formats=zip
 python -m pip install dist/*.zip
 
 if [ "$CHECK_DOCS" = "1" ]; then
-    python -m pip install -r ci/rtd-requirements.txt
+    python -m pip install -r docs-requirements.txt
     towncrier --yes  # catch errors in newsfragments
     cd docs
     # -n (nit-picky): warn on missing references
@@ -119,12 +119,12 @@ else
     cd empty
 
     INSTALLDIR=$(python -c "import os, trio; print(os.path.dirname(trio.__file__))")
+    cp ../setup.cfg $INSTALLDIR
     pytest -W error -ra --junitxml=../test-results.xml --run-slow --faulthandler-timeout=60 ${INSTALLDIR} --cov="$INSTALLDIR" --cov-config=../.coveragerc --verbose
 
-    # Disable coverage on 3.8-dev, at least until it's fixed (or a1 comes out):
-    #   https://github.com/python-trio/trio/issues/711
-    #   https://github.com/nedbat/coveragepy/issues/707#issuecomment-426455490
-    if [ "$(python -V)" != "Python 3.8.0a0" ]; then
+    # Disable coverage on 3.8 until we run 3.8 on Windows CI too
+    #   https://github.com/python-trio/trio/pull/784#issuecomment-446438407
+    if [[ "$(python -V)" != Python\ 3.8* ]]; then
         # Disable coverage on pypy py3.6 nightly for now:
         # https://bitbucket.org/pypy/pypy/issues/2943/
         if [ "$PYPY_NIGHTLY_BRANCH" != "py3.6" ]; then

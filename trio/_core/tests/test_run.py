@@ -411,14 +411,9 @@ def test_instruments(recwarn):
     # reschedules the task immediately upon yielding, before the
     # after_task_step event fires.
     expected = (
-        [("before_run",),
-         ("schedule", task)] +
-        [("before", task),
-         ("schedule", task),
-         ("after", task)] * 5 + [
-             ("before", task),
-             ("after", task), ("after_run",)
-         ]
+        [("before_run",), ("schedule", task)] +
+        [("before", task), ("schedule", task), ("after", task)] * 5 +
+        [("before", task), ("after", task), ("after_run",)]
     )
     assert len(r1.record) > len(r2.record) > len(r3.record)
     assert r1.record == r2.record + r3.record
@@ -551,11 +546,7 @@ async def test_cancel_scope_repr(mock_clock):
     scope = _core.CancelScope()
     assert "unbound" in repr(scope)
     with scope:
-        assert "bound to 1 task" in repr(scope)
-        async with _core.open_nursery() as nursery:
-            nursery.start_soon(sleep, 10)
-            assert "bound to 2 tasks" in repr(scope)
-            nursery.cancel_scope.cancel()
+        assert "active" in repr(scope)
         scope.deadline = _core.current_time() - 1
         assert "deadline is 1.00 seconds ago" in repr(scope)
         scope.deadline = _core.current_time() + 10
@@ -876,6 +867,16 @@ async def test_cancel_unbound():
         await wait_all_tasks_blocked()
         scope.cancel()
 
+    # Shield before entry
+    scope = _core.CancelScope()
+    scope.shield = True
+    with _core.CancelScope() as outer, scope:
+        outer.cancel()
+        await _core.checkpoint()
+        scope.shield = False
+        with pytest.raises(_core.Cancelled):
+            await _core.checkpoint()
+
     # Can't reuse
     with _core.CancelScope() as scope:
         await _core.checkpoint()
@@ -911,6 +912,15 @@ async def test_cancel_unbound():
                 pass  # pragma: no cover
         assert "single 'with' block" in str(exc_info.value)
         nursery.cancel_scope.cancel()
+
+    # If not yet entered, cancel_called is true when the deadline has passed
+    # even if cancel() hasn't been called yet
+    scope = _core.CancelScope(deadline=_core.current_time() + 1)
+    assert not scope.cancel_called
+    scope.deadline -= 1
+    assert scope.cancel_called
+    scope.deadline += 1
+    assert scope.cancel_called  # never become un-cancelled
 
 
 async def test_timekeeping():
@@ -1112,7 +1122,7 @@ async def test_yield_briefly_checks_for_timeout(mock_clock):
 
 # This tests that sys.exc_info is properly saved/restored as we swap between
 # tasks. It turns out that the interpreter automagically handles this for us
-# so there's no special code in trio required to pass this test, but it's
+# so there's no special code in Trio required to pass this test, but it's
 # still nice to know that it works :-).
 #
 # Update: it turns out I was right to be nervous! see the next test...
@@ -1658,10 +1668,6 @@ def test_nice_error_on_bad_calls_to_run_or_spawn():
             assert "asyncio" in str(excinfo.value)
 
             with pytest.raises(TypeError) as excinfo:
-                bad_call(generator_based_coro)
-            assert "asyncio" in str(excinfo.value)
-
-            with pytest.raises(TypeError) as excinfo:
                 bad_call(lambda: asyncio.Future())
             assert "asyncio" in str(excinfo.value)
 
@@ -2066,7 +2072,7 @@ def test_system_task_contexts():
 
 def test_Cancelled_init():
     check_Cancelled_error = pytest.raises(
-        RuntimeError, match='should not be raised directly'
+        TypeError, match='no public constructor available'
     )
 
     with check_Cancelled_error:
@@ -2076,7 +2082,30 @@ def test_Cancelled_init():
         _core.Cancelled()
 
     # private constructor should not raise
-    _core.Cancelled._init()
+    _core.Cancelled._create()
+
+
+def test_Cancelled_str():
+    cancelled = _core.Cancelled._create()
+    assert str(cancelled) == 'Cancelled'
+
+
+def test_Cancelled_subclass():
+    with pytest.raises(
+        TypeError, match='`Cancelled` does not support subclassing'
+    ):
+
+        class Subclass(_core.Cancelled):
+            pass
+
+
+def test_CancelScope_subclass():
+    with pytest.raises(
+        TypeError, match='`CancelScope` does not support subclassing'
+    ):
+
+        class Subclass(_core.CancelScope):
+            pass
 
 
 def test_sniffio_integration():
