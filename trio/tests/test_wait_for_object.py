@@ -1,5 +1,4 @@
 import os
-import time
 
 import pytest
 
@@ -8,12 +7,12 @@ on_windows = (os.name == "nt")
 pytestmark = pytest.mark.skipif(not on_windows, reason="windows only")
 
 from .._core.tests.tutil import slow
+import trio
 from .. import _core
 from .. import _timeouts
 if on_windows:
     from .._core._windows_cffi import ffi, kernel32
     from .._wait_for_object import WaitForSingleObject, WaitForMultipleObjects_sync
-    from trio import run_sync_in_worker_thread
 
 
 async def test_WaitForMultipleObjects_sync():
@@ -81,7 +80,7 @@ async def test_WaitForMultipleObjects_sync_slow():
     t0 = _core.current_time()
     async with _core.open_nursery() as nursery:
         nursery.start_soon(
-            run_sync_in_worker_thread, WaitForMultipleObjects_sync, handle1
+            trio.to_thread.run_sync, WaitForMultipleObjects_sync, handle1
         )
         await _timeouts.sleep(TIMEOUT)
         # If we would comment the line below, the above thread will be stuck,
@@ -98,7 +97,7 @@ async def test_WaitForMultipleObjects_sync_slow():
     t0 = _core.current_time()
     async with _core.open_nursery() as nursery:
         nursery.start_soon(
-            run_sync_in_worker_thread, WaitForMultipleObjects_sync, handle1,
+            trio.to_thread.run_sync, WaitForMultipleObjects_sync, handle1,
             handle2
         )
         await _timeouts.sleep(TIMEOUT)
@@ -115,7 +114,7 @@ async def test_WaitForMultipleObjects_sync_slow():
     t0 = _core.current_time()
     async with _core.open_nursery() as nursery:
         nursery.start_soon(
-            run_sync_in_worker_thread, WaitForMultipleObjects_sync, handle1,
+            trio.to_thread.run_sync, WaitForMultipleObjects_sync, handle1,
             handle2
         )
         await _timeouts.sleep(TIMEOUT)
@@ -204,8 +203,6 @@ async def test_WaitForSingleObject_slow():
     print('test_WaitForSingleObject_slow set from task as int OK')
 
     # Test handle is CLOSED after 1 sec - NOPE see comment above
-
-    pass
 
     # Test cancellation
 

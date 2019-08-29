@@ -10,6 +10,12 @@ from .abc import HalfCloseableStream, Listener
 
 __all__ = ["SocketStream", "SocketListener"]
 
+# XX TODO: this number was picked arbitrarily. We should do experiments to
+# tune it. (Or make it dynamic -- one idea is to start small and increase it
+# if we observe single reads filling up the whole buffer, at least within some
+# limits.)
+DEFAULT_RECEIVE_SIZE = 65536
+
 _closed_stream_errnos = {
     # Unix
     errno.EBADF,
@@ -95,17 +101,16 @@ class SocketStream(HalfCloseableStream):
 
     async def send_all(self, data):
         if self.socket.did_shutdown_SHUT_WR:
-            await trio.hazmat.checkpoint()
             raise trio.ClosedResourceError("can't send data after sending EOF")
-        with self._send_conflict_detector.sync:
+        with self._send_conflict_detector:
             with _translate_socket_errors_to_stream_errors():
                 with memoryview(data) as data:
                     if not data:
-                        await trio.hazmat.checkpoint()
                         if self.socket.fileno() == -1:
                             raise trio.ClosedResourceError(
                                 "socket was already closed"
                             )
+                        await trio.hazmat.checkpoint()
                         return
                     total_sent = 0
                     while total_sent < len(data):
@@ -114,14 +119,15 @@ class SocketStream(HalfCloseableStream):
                         total_sent += sent
 
     async def wait_send_all_might_not_block(self):
-        async with self._send_conflict_detector:
+        with self._send_conflict_detector:
             if self.socket.fileno() == -1:
                 raise trio.ClosedResourceError
             with _translate_socket_errors_to_stream_errors():
                 await self.socket.wait_writable()
 
     async def send_eof(self):
-        async with self._send_conflict_detector:
+        with self._send_conflict_detector:
+            await trio.hazmat.checkpoint()
             # On macOS, calling shutdown a second time raises ENOTCONN, but
             # send_eof needs to be idempotent.
             if self.socket.did_shutdown_SHUT_WR:
@@ -129,9 +135,10 @@ class SocketStream(HalfCloseableStream):
             with _translate_socket_errors_to_stream_errors():
                 self.socket.shutdown(tsocket.SHUT_WR)
 
-    async def receive_some(self, max_bytes):
+    async def receive_some(self, max_bytes=None):
+        if max_bytes is None:
+            max_bytes = DEFAULT_RECEIVE_SIZE
         if max_bytes < 1:
-            await trio.hazmat.checkpoint()
             raise ValueError("max_bytes must be >= 1")
         with _translate_socket_errors_to_stream_errors():
             return await self.socket.recv(max_bytes)
@@ -383,7 +390,5 @@ class SocketListener(Listener[SocketStream]):
         """Close this listener and its underlying socket.
 
         """
-        try:
-            self.socket.close()
-        finally:
-            await trio.hazmat.checkpoint()
+        self.socket.close()
+        await trio.hazmat.checkpoint()

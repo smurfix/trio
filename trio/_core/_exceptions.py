@@ -15,22 +15,19 @@ class TrioInternalError(Exception):
     tasks.) Again, though, this shouldn't happen.
 
     """
-    pass
 
 
 class RunFinishedError(RuntimeError):
-    """Raised by ``run_in_trio_thread`` and similar functions if the
+    """Raised by `trio.from_thread.run` and similar functions if the
     corresponding call to :func:`trio.run` has already finished.
 
     """
-    pass
 
 
 class WouldBlock(Exception):
     """Raised by ``X_nowait`` functions if ``X`` would block.
 
     """
-    pass
 
 
 class Cancelled(BaseException, metaclass=NoPublicConstructor):

@@ -6,7 +6,7 @@ import threading
 import time
 import types
 import warnings
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from math import inf
 
 import attr
@@ -17,7 +17,7 @@ from async_generator import async_generator
 
 from .tutil import check_sequence_matches, gc_collect_harder
 from ... import _core
-from ..._threads import run_sync_in_worker_thread
+from ..._threads import to_thread_run_sync
 from ..._timeouts import sleep, fail_after
 from ..._util import aiter_compat
 from ...testing import (
@@ -190,8 +190,8 @@ def test_main_and_task_both_crash():
     with pytest.raises(_core.MultiError) as excinfo:
         _core.run(main)
     print(excinfo.value)
-    assert set(type(exc)
-               for exc in excinfo.value.exceptions) == {ValueError, KeyError}
+    assert {type(exc)
+            for exc in excinfo.value.exceptions} == {ValueError, KeyError}
 
 
 def test_two_child_crashes():
@@ -205,8 +205,8 @@ def test_two_child_crashes():
 
     with pytest.raises(_core.MultiError) as excinfo:
         _core.run(main)
-    assert set(type(exc)
-               for exc in excinfo.value.exceptions) == {ValueError, KeyError}
+    assert {type(exc)
+            for exc in excinfo.value.exceptions} == {ValueError, KeyError}
 
 
 async def test_child_crash_wakes_parent():
@@ -348,7 +348,7 @@ async def test_current_statistics(mock_clock):
 
 @attr.s(cmp=False, hash=False)
 class TaskRecorder:
-    record = attr.ib(default=attr.Factory(list))
+    record = attr.ib(factory=list)
 
     def before_run(self):
         self.record.append(("before_run",))
@@ -552,7 +552,7 @@ async def test_cancel_scope_repr(mock_clock):
         scope.deadline = _core.current_time() + 10
         assert "deadline is 10.00 seconds from now" in repr(scope)
         # when not in async context, can't get the current time
-        assert "deadline" not in await run_sync_in_worker_thread(repr, scope)
+        assert "deadline" not in await to_thread_run_sync(repr, scope)
         scope.cancel()
         assert "cancelled" in repr(scope)
     assert "exited" in repr(scope)
@@ -921,6 +921,76 @@ async def test_cancel_unbound():
     assert scope.cancel_called
     scope.deadline += 1
     assert scope.cancel_called  # never become un-cancelled
+
+
+async def test_cancel_scope_misnesting():
+    outer = _core.CancelScope()
+    inner = _core.CancelScope()
+    with ExitStack() as stack:
+        stack.enter_context(outer)
+        with inner:
+            with pytest.raises(RuntimeError, match="still within its child"):
+                stack.close()
+        # No further error is raised when exiting the inner context
+
+    # If there are other tasks inside the abandoned part of the cancel tree,
+    # they get cancelled when the misnesting is detected
+    async def task1():
+        with pytest.raises(_core.Cancelled):
+            await sleep_forever()
+
+    # Even if inside another cancel scope
+    async def task2():
+        with _core.CancelScope():
+            with pytest.raises(_core.Cancelled):
+                await sleep_forever()
+
+    with ExitStack() as stack:
+        stack.enter_context(_core.CancelScope())
+        async with _core.open_nursery() as nursery:
+            nursery.start_soon(task1)
+            nursery.start_soon(task2)
+            await wait_all_tasks_blocked()
+            with pytest.raises(RuntimeError, match="still within its child"):
+                stack.close()
+
+    # Variant that makes the child tasks direct children of the scope
+    # that noticed the misnesting:
+    nursery_mgr = _core.open_nursery()
+    nursery = await nursery_mgr.__aenter__()
+    try:
+        nursery.start_soon(task1)
+        nursery.start_soon(task2)
+        nursery.start_soon(sleep_forever)
+        await wait_all_tasks_blocked()
+        nursery.cancel_scope.__exit__(None, None, None)
+    finally:
+        with pytest.raises(RuntimeError) as exc_info:
+            await nursery_mgr.__aexit__(*sys.exc_info())
+        assert "which had already been exited" in str(exc_info.value)
+        assert type(exc_info.value.__context__) is _core.MultiError
+        assert len(exc_info.value.__context__.exceptions) == 3
+        cancelled_in_context = False
+        for exc in exc_info.value.__context__.exceptions:
+            assert isinstance(exc, RuntimeError)
+            assert "closed before the task exited" in str(exc)
+            cancelled_in_context |= isinstance(
+                exc.__context__, _core.Cancelled
+            )
+        assert cancelled_in_context  # for the sleep_forever
+
+    # Trying to exit a cancel scope from an unrelated task raises an error
+    # without affecting any state
+    async def task3(task_status):
+        with _core.CancelScope() as scope:
+            task_status.started(scope)
+            await sleep_forever()
+
+    async with _core.open_nursery() as nursery:
+        scope = await nursery.start(task3)
+        with pytest.raises(RuntimeError, match="from unrelated"):
+            scope.__exit__(None, None, None)
+        scope.cancel()
 
 
 async def test_timekeeping():
@@ -1629,6 +1699,8 @@ async def test_current_effective_deadline(mock_clock):
     assert _core.current_effective_deadline() == inf
 
 
+# @coroutine is deprecated since python 3.8, which is fine with us.
+@pytest.mark.filterwarnings("ignore:.*@coroutine.*:DeprecationWarning")
 def test_nice_error_on_bad_calls_to_run_or_spawn():
     def bad_call_run(*args):
         _core.run(*args)
@@ -1725,9 +1797,10 @@ async def test_trivial_yields():
             async with _core.open_nursery():
                 raise KeyError
         assert len(excinfo.value.exceptions) == 2
-        assert set(type(e) for e in excinfo.value.exceptions) == {
-            KeyError, _core.Cancelled
-        }
+        assert {type(e)
+                for e in excinfo.value.exceptions} == {
+                    KeyError, _core.Cancelled
+                }
 
 
 async def test_nursery_start(autojump_clock):
@@ -1816,9 +1889,8 @@ async def test_nursery_start(autojump_clock):
             cs.cancel()
             with pytest.raises(_core.MultiError) as excinfo:
                 await nursery.start(raise_keyerror_after_started)
-    assert set(type(e) for e in excinfo.value.exceptions) == {
-        _core.Cancelled, KeyError
-    }
+    assert {type(e)
+            for e in excinfo.value.exceptions} == {_core.Cancelled, KeyError}
 
     # trying to start in a closed nursery raises an error immediately
     async with _core.open_nursery() as closed_nursery:
@@ -1933,7 +2005,7 @@ async def test_nursery_stop_iteration():
 
 
 async def test_nursery_stop_async_iteration():
-    class it(object):
+    class it:
         def __init__(self, count):
             self.count = count
             self.val = 0
@@ -1946,7 +2018,7 @@ async def test_nursery_stop_async_iteration():
             self.val += 1
             return val
 
-    class async_zip(object):
+    class async_zip:
         def __init__(self, *largs):
             self.nexts = [obj.__anext__ for obj in largs]
 
@@ -2068,6 +2140,30 @@ def test_system_task_contexts():
             await wait_all_tasks_blocked()
 
     _core.run(inner)
+
+
+def test_Nursery_init():
+    check_Nursery_error = pytest.raises(
+        TypeError, match='no public constructor available'
+    )
+
+    with check_Nursery_error:
+        _core._run.Nursery(None, None)
+
+
+async def test_Nursery_private_init():
+    # context manager creation should not raise
+    async with _core.open_nursery() as nursery:
+        assert False == nursery._closed
+
+
+def test_Nursery_subclass():
+    with pytest.raises(
+        TypeError, match='`Nursery` does not support subclassing'
+    ):
+
+        class Subclass(_core._run.Nursery):
+            pass
 
 
 def test_Cancelled_init():

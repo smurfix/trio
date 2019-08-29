@@ -61,7 +61,8 @@ async def sleep_until(deadline):
 
     Args:
         deadline (float): The time at which we should wake up again. May be in
-            the past, in which case this function yields but does not block.
+            the past, in which case this function executes a checkpoint but
+            does not block.
 
     """
     with move_on_at(deadline):
@@ -92,7 +93,6 @@ class TooSlowError(Exception):
     expires.
 
     """
-    pass
 
 
 @contextmanager
