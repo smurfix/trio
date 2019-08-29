@@ -36,8 +36,7 @@ async def test_magic():
 
 
 cls_pairs = [
-    (trio.Path, pathlib.Path),
-    (pathlib.Path, trio.Path),
+    (trio.Path, pathlib.Path), (pathlib.Path, trio.Path),
     (trio.Path, trio.Path)
 ]
 
@@ -62,9 +61,7 @@ async def test_cmp_magic(cls_a, cls_b):
 # __*div__ does not properly raise NotImplementedError like the other comparison
 # magic, so trio.Path's implementation does not get dispatched
 cls_pairs = [
-    (trio.Path, pathlib.Path),
-    (trio.Path, trio.Path),
-    (trio.Path, str),
+    (trio.Path, pathlib.Path), (trio.Path, trio.Path), (trio.Path, str),
     (str, trio.Path)
 ]
 
@@ -200,6 +197,35 @@ async def test_open_file_can_open_path(path):
         assert f.name == fspath(path)
 
 
+async def test_globmethods(path):
+    # Populate a directory tree
+    await path.mkdir()
+    await (path / 'foo').mkdir()
+    await (path / 'foo' / '_bar.txt').write_bytes(b'')
+    await (path / 'bar.txt').write_bytes(b'')
+    await (path / 'bar.dat').write_bytes(b'')
+
+    # Path.glob
+    for _pattern, _results in {
+        '*.txt': {'bar.txt'},
+        '**/*.txt': {'_bar.txt', 'bar.txt'},
+    }.items():
+        entries = set()
+        for entry in await path.glob(_pattern):
+            assert isinstance(entry, trio.Path)
+            entries.add(entry.name)
+
+        assert entries == _results
+
+    # Path.rglob
+    entries = set()
+    for entry in await path.rglob('*.txt'):
+        assert isinstance(entry, trio.Path)
+        entries.add(entry.name)
+
+    assert entries == {'_bar.txt', 'bar.txt'}
+
+
 async def test_iterdir(path):
     # Populate a directory
     await path.mkdir()
@@ -212,3 +238,14 @@ async def test_iterdir(path):
         entries.add(entry.name)
 
     assert entries == {'bar.txt', 'foo'}
+
+
+async def test_classmethods():
+    assert isinstance(await trio.Path.home(), trio.Path)
+
+    # pathlib.Path has only two classmethods
+    assert str(await trio.Path.home()) == os.path.expanduser('~')
+    assert str(await trio.Path.cwd()) == os.getcwd()
+
+    # Wrapped method has docstring
+    assert trio.Path.home.__doc__

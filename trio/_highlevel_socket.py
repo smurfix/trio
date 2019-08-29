@@ -3,12 +3,18 @@
 import errno
 from contextlib import contextmanager
 
-from . import _core
+import trio
 from . import socket as tsocket
 from ._util import ConflictDetector
 from .abc import HalfCloseableStream, Listener
 
 __all__ = ["SocketStream", "SocketListener"]
+
+# XX TODO: this number was picked arbitrarily. We should do experiments to
+# tune it. (Or make it dynamic -- one idea is to start small and increase it
+# if we observe single reads filling up the whole buffer, at least within some
+# limits.)
+DEFAULT_RECEIVE_SIZE = 65536
 
 _closed_stream_errnos = {
     # Unix
@@ -24,11 +30,11 @@ def _translate_socket_errors_to_stream_errors():
         yield
     except OSError as exc:
         if exc.errno in _closed_stream_errnos:
-            raise _core.ClosedResourceError(
+            raise trio.ClosedResourceError(
                 "this socket was already closed"
             ) from None
         else:
-            raise _core.BrokenResourceError(
+            raise trio.BrokenResourceError(
                 "socket connection broken: {}".format(exc)
             ) from exc
 
@@ -38,7 +44,7 @@ class SocketStream(HalfCloseableStream):
     interface based on a raw network socket.
 
     Args:
-      socket: The trio socket object to wrap. Must have type ``SOCK_STREAM``,
+      socket: The Trio socket object to wrap. Must have type ``SOCK_STREAM``,
           and be connected.
 
     By default for TCP sockets, :class:`SocketStream` enables ``TCP_NODELAY``,
@@ -59,7 +65,7 @@ class SocketStream(HalfCloseableStream):
 
     def __init__(self, socket):
         if not isinstance(socket, tsocket.SocketType):
-            raise TypeError("SocketStream requires trio socket object")
+            raise TypeError("SocketStream requires a Trio socket object")
         if socket.type != tsocket.SOCK_STREAM:
             raise ValueError("SocketStream requires a SOCK_STREAM socket")
 
@@ -95,19 +101,16 @@ class SocketStream(HalfCloseableStream):
 
     async def send_all(self, data):
         if self.socket.did_shutdown_SHUT_WR:
-            await _core.checkpoint()
-            raise _core.ClosedResourceError(
-                "can't send data after sending EOF"
-            )
-        with self._send_conflict_detector.sync:
+            raise trio.ClosedResourceError("can't send data after sending EOF")
+        with self._send_conflict_detector:
             with _translate_socket_errors_to_stream_errors():
                 with memoryview(data) as data:
                     if not data:
-                        await _core.checkpoint()
                         if self.socket.fileno() == -1:
-                            raise _core.ClosedResourceError(
+                            raise trio.ClosedResourceError(
                                 "socket was already closed"
                             )
+                        await trio.hazmat.checkpoint()
                         return
                     total_sent = 0
                     while total_sent < len(data):
@@ -116,14 +119,15 @@ class SocketStream(HalfCloseableStream):
                         total_sent += sent
 
     async def wait_send_all_might_not_block(self):
-        async with self._send_conflict_detector:
+        with self._send_conflict_detector:
             if self.socket.fileno() == -1:
-                raise _core.ClosedResourceError
+                raise trio.ClosedResourceError
             with _translate_socket_errors_to_stream_errors():
                 await self.socket.wait_writable()
 
     async def send_eof(self):
-        async with self._send_conflict_detector:
+        with self._send_conflict_detector:
+            await trio.hazmat.checkpoint()
             # On macOS, calling shutdown a second time raises ENOTCONN, but
             # send_eof needs to be idempotent.
             if self.socket.did_shutdown_SHUT_WR:
@@ -131,16 +135,17 @@ class SocketStream(HalfCloseableStream):
             with _translate_socket_errors_to_stream_errors():
                 self.socket.shutdown(tsocket.SHUT_WR)
 
-    async def receive_some(self, max_bytes):
+    async def receive_some(self, max_bytes=None):
+        if max_bytes is None:
+            max_bytes = DEFAULT_RECEIVE_SIZE
         if max_bytes < 1:
-            await _core.checkpoint()
             raise ValueError("max_bytes must be >= 1")
         with _translate_socket_errors_to_stream_errors():
             return await self.socket.recv(max_bytes)
 
     async def aclose(self):
         self.socket.close()
-        await _core.checkpoint()
+        await trio.hazmat.checkpoint()
 
     # __aenter__, __aexit__ inherited from HalfCloseableStream are OK
 
@@ -180,7 +185,7 @@ class SocketStream(HalfCloseableStream):
 # Here's a list of all the possible errors that accept() can return, according
 # to the POSIX spec or the Linux, FreeBSD, macOS, and Windows docs:
 #
-# Can't happen with a trio socket:
+# Can't happen with a Trio socket:
 # - EAGAIN/(WSA)EWOULDBLOCK
 # - EINTR
 # - WSANOTINITIALISED
@@ -323,7 +328,7 @@ class SocketListener(Listener[SocketStream]):
     incoming connections as :class:`SocketStream` objects.
 
     Args:
-      socket: The trio socket object to wrap. Must have type ``SOCK_STREAM``,
+      socket: The Trio socket object to wrap. Must have type ``SOCK_STREAM``,
           and be listening.
 
     Note that the :class:`SocketListener` "takes ownership" of the given
@@ -337,7 +342,7 @@ class SocketListener(Listener[SocketStream]):
 
     def __init__(self, socket):
         if not isinstance(socket, tsocket.SocketType):
-            raise TypeError("SocketListener requires trio socket object")
+            raise TypeError("SocketListener requires a Trio socket object")
         if socket.type != tsocket.SOCK_STREAM:
             raise ValueError("SocketListener requires a SOCK_STREAM socket")
         try:
@@ -375,7 +380,7 @@ class SocketListener(Listener[SocketStream]):
                 sock, _ = await self.socket.accept()
             except OSError as exc:
                 if exc.errno in _closed_stream_errnos:
-                    raise _core.ClosedResourceError
+                    raise trio.ClosedResourceError
                 if exc.errno not in _ignorable_accept_errnos:
                     raise
             else:
@@ -385,7 +390,5 @@ class SocketListener(Listener[SocketStream]):
         """Close this listener and its underlying socket.
 
         """
-        try:
-            self.socket.close()
-        finally:
-            await _core.checkpoint()
+        self.socket.close()
+        await trio.hazmat.checkpoint()

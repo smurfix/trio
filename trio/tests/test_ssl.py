@@ -114,7 +114,7 @@ async def ssl_echo_server_raw(**kwargs):
         # nursery context manager to exit too.
         with a, b:
             nursery.start_soon(
-                trio.run_sync_in_worker_thread,
+                trio.to_thread.run_sync,
                 partial(ssl_echo_serve_sync, b, **kwargs)
             )
 
@@ -194,13 +194,15 @@ class PyOpenSSLEchoStream:
         assert self._conn.renegotiate()
 
     async def wait_send_all_might_not_block(self):
-        async with self._send_all_conflict_detector:
+        with self._send_all_conflict_detector:
+            await _core.checkpoint()
             await _core.checkpoint()
             await self.sleeper("wait_send_all_might_not_block")
 
     async def send_all(self, data):
         print("  --> transport_stream.send_all")
-        async with self._send_all_conflict_detector:
+        with self._send_all_conflict_detector:
+            await _core.checkpoint()
             await _core.checkpoint()
             await self.sleeper("send_all")
             self._conn.bio_write(data)
@@ -220,10 +222,13 @@ class PyOpenSSLEchoStream:
             await self.sleeper("send_all")
             print("  <-- transport_stream.send_all finished")
 
-    async def receive_some(self, nbytes):
+    async def receive_some(self, nbytes=None):
         print("  --> transport_stream.receive_some")
-        async with self._receive_some_conflict_detector:
+        if nbytes is None:
+            nbytes = 65536  # arbitrary
+        with self._receive_some_conflict_detector:
             try:
+                await _core.checkpoint()
                 await _core.checkpoint()
                 while True:
                     await self.sleeper("receive_some")
@@ -858,23 +863,19 @@ async def test_closing_nice_case():
         await client_ssl.aclose()
 
     # Trying to send more data does not work
-    with assert_checkpoints():
-        with pytest.raises(ClosedResourceError):
-            await server_ssl.send_all(b"123")
+    with pytest.raises(ClosedResourceError):
+        await server_ssl.send_all(b"123")
 
     # And once the connection is has been closed *locally*, then instead of
     # getting empty bytestrings we get a proper error
-    with assert_checkpoints():
-        with pytest.raises(ClosedResourceError):
-            await client_ssl.receive_some(10) == b""
+    with pytest.raises(ClosedResourceError):
+        await client_ssl.receive_some(10) == b""
 
-    with assert_checkpoints():
-        with pytest.raises(ClosedResourceError):
-            await client_ssl.unwrap()
+    with pytest.raises(ClosedResourceError):
+        await client_ssl.unwrap()
 
-    with assert_checkpoints():
-        with pytest.raises(ClosedResourceError):
-            await client_ssl.do_handshake()
+    with pytest.raises(ClosedResourceError):
+        await client_ssl.do_handshake()
 
     # Check that a graceful close *before* handshaking gives a clean EOF on
     # the other side
@@ -1233,17 +1234,25 @@ async def test_SSLListener():
 
     ################
 
-    # Test https_compatible and max_refill_bytes
-    _, ssl_listener, ssl_client = await setup(
-        https_compatible=True,
-        max_refill_bytes=100,
-    )
+    # Test https_compatible
+    _, ssl_listener, ssl_client = await setup(https_compatible=True)
 
     ssl_server = await ssl_listener.accept()
 
     assert ssl_server._https_compatible
-    assert ssl_server._max_refill_bytes == 100
 
     await aclose_forcefully(ssl_listener)
     await aclose_forcefully(ssl_client)
     await aclose_forcefully(ssl_server)
+
+
+async def test_deprecated_max_refill_bytes():
+    stream1, stream2 = memory_stream_pair()
+    with pytest.warns(trio.TrioDeprecationWarning):
+        SSLStream(stream1, CLIENT_CTX, max_refill_bytes=100)
+    with pytest.warns(trio.TrioDeprecationWarning):
+        # passing None is wrong here, but I'm too lazy to make a fake Listener
+        # and we get away with it for now. And this test will be deleted in a
+        # release or two anyway, so hopefully we'll keep getting away with it
+        # for long enough.
+        SSLListener(None, CLIENT_CTX, max_refill_bytes=100)

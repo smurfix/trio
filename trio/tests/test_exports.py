@@ -1,4 +1,3 @@
-import os
 import sys
 import importlib
 import types
@@ -55,6 +54,14 @@ NAMESPACES = list(public_namespaces(trio))
 @pytest.mark.skipif(
     sys.version_info.releaselevel == "alpha",
     reason="skip static introspection tools on Python dev/alpha releases",
+)
+@pytest.mark.filterwarnings(
+    # https://github.com/PyCQA/astroid/issues/681
+    "ignore:the imp module is deprecated.*:DeprecationWarning"
+)
+@pytest.mark.filterwarnings(
+    # Same as above, but on Python 3.5
+    "ignore:the imp module is deprecated.*:PendingDeprecationWarning"
 )
 @pytest.mark.parametrize("modname", NAMESPACES)
 @pytest.mark.parametrize("tool", ["pylint", "jedi"])

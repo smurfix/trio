@@ -1,10 +1,10 @@
-import os
-from typing import Tuple
-
 from . import _core
 from ._abc import SendStream, ReceiveStream
 from ._util import ConflictDetector
 from ._core._windows_cffi import _handle, raise_winerror, kernel32, ffi
+
+# XX TODO: don't just make this up based on nothing.
+DEFAULT_RECEIVE_SIZE = 65536
 
 
 # See the comments on _unix_pipes._FdHolder for discussion of why we set the
@@ -49,11 +49,12 @@ class PipeSendStream(SendStream):
         )
 
     async def send_all(self, data: bytes):
-        async with self._conflict_detector:
+        with self._conflict_detector:
             if self._handle_holder.closed:
                 raise _core.ClosedResourceError("this pipe is already closed")
 
             if not data:
+                await _core.checkpoint()
                 return
 
             try:
@@ -68,12 +69,12 @@ class PipeSendStream(SendStream):
             assert written == len(data)
 
     async def wait_send_all_might_not_block(self) -> None:
-        async with self._conflict_detector:
+        with self._conflict_detector:
             if self._handle_holder.closed:
                 raise _core.ClosedResourceError("This pipe is already closed")
 
             # not implemented yet, and probably not needed
-            pass
+            await _core.checkpoint()
 
     async def aclose(self):
         await self._handle_holder.aclose()
@@ -88,16 +89,18 @@ class PipeReceiveStream(ReceiveStream):
             "another task is currently using this pipe"
         )
 
-    async def receive_some(self, max_bytes: int) -> bytes:
-        async with self._conflict_detector:
+    async def receive_some(self, max_bytes=None) -> bytes:
+        with self._conflict_detector:
             if self._handle_holder.closed:
                 raise _core.ClosedResourceError("this pipe is already closed")
 
-            if not isinstance(max_bytes, int):
-                raise TypeError("max_bytes must be integer >= 1")
-
-            if max_bytes < 1:
-                raise ValueError("max_bytes must be integer >= 1")
+            if max_bytes is None:
+                max_bytes = DEFAULT_RECEIVE_SIZE
+            else:
+                if not isinstance(max_bytes, int):
+                    raise TypeError("max_bytes must be integer >= 1")
+                if max_bytes < 1:
+                    raise ValueError("max_bytes must be integer >= 1")
 
             buffer = bytearray(max_bytes)
             try:
