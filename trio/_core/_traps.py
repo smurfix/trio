@@ -1,7 +1,6 @@
 # These are the only functions that ever yield back to the task runner.
 
 import types
-import enum
 
 import attr
 import outcome
