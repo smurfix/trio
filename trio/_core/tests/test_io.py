@@ -3,9 +3,11 @@ import pytest
 import socket as stdlib_socket
 import select
 import random
+import errno
 
 from ... import _core
 from ...testing import wait_all_tasks_blocked, Sequencer, assert_checkpoints
+import trio
 
 # Cross-platform tests for IO handling
 
@@ -45,36 +47,27 @@ def using_fileno(fn):
     return fileno_wrapper
 
 
-wait_readable_options = [_core.wait_socket_readable]
-wait_writable_options = [_core.wait_socket_writable]
-notify_close_options = [_core.notify_socket_close]
-
-# We aren't testing the _fd_ versions, because they're the same as the socket
-# ones. But if they ever stop being the same we should notice and add tests!
-if hasattr(_core, "wait_readable"):
-    assert _core.wait_socket_readable is _core.wait_readable
-if hasattr(_core, "wait_writable"):
-    assert _core.wait_socket_writable is _core.wait_writable
-if hasattr(_core, "notify_fd_close"):
-    assert _core.notify_socket_close is _core.notify_fd_close
+wait_readable_options = [trio.hazmat.wait_readable]
+wait_writable_options = [trio.hazmat.wait_writable]
+notify_closing_options = [trio.hazmat.notify_closing]
 
 for options_list in [
-    wait_readable_options, wait_writable_options, notify_close_options
+    wait_readable_options, wait_writable_options, notify_closing_options
 ]:
     options_list += [using_fileno(f) for f in options_list]
 
 # Decorators that feed in different settings for wait_readable / wait_writable
-# / notify_close.
+# / notify_closing.
 # Note that if you use all three decorators on the same test, it will run all
-# N**4 *combinations*
+# N**3 *combinations*
 read_socket_test = pytest.mark.parametrize(
     "wait_readable", wait_readable_options, ids=lambda fn: fn.__name__
 )
 write_socket_test = pytest.mark.parametrize(
     "wait_writable", wait_writable_options, ids=lambda fn: fn.__name__
 )
-notify_close_test = pytest.mark.parametrize(
-    "notify_close", notify_close_options, ids=lambda fn: fn.__name__
+notify_closing_test = pytest.mark.parametrize(
+    "notify_closing", notify_closing_options, ids=lambda fn: fn.__name__
 )
 
 
@@ -156,9 +149,8 @@ async def test_double_read(socketpair, wait_readable):
     async with _core.open_nursery() as nursery:
         nursery.start_soon(wait_readable, a)
         await wait_all_tasks_blocked()
-        with assert_checkpoints():
-            with pytest.raises(_core.BusyResourceError):
-                await wait_readable(a)
+        with pytest.raises(_core.BusyResourceError):
+            await wait_readable(a)
         nursery.cancel_scope.cancel()
 
 
@@ -171,17 +163,16 @@ async def test_double_write(socketpair, wait_writable):
     async with _core.open_nursery() as nursery:
         nursery.start_soon(wait_writable, a)
         await wait_all_tasks_blocked()
-        with assert_checkpoints():
-            with pytest.raises(_core.BusyResourceError):
-                await wait_writable(a)
+        with pytest.raises(_core.BusyResourceError):
+            await wait_writable(a)
         nursery.cancel_scope.cancel()
 
 
 @read_socket_test
 @write_socket_test
-@notify_close_test
+@notify_closing_test
 async def test_interrupted_by_close(
-    socketpair, wait_readable, wait_writable, notify_close
+    socketpair, wait_readable, wait_writable, notify_closing
 ):
     a, b = socketpair
 
@@ -199,7 +190,7 @@ async def test_interrupted_by_close(
         nursery.start_soon(reader)
         nursery.start_soon(writer)
         await wait_all_tasks_blocked()
-        notify_close(a)
+        notify_closing(a)
 
 
 @read_socket_test
@@ -283,3 +274,81 @@ async def test_socket_actual_streaming(
 
     assert results["send_a"] == results["recv_b"]
     assert results["send_b"] == results["recv_a"]
+
+
+async def test_notify_closing_on_invalid_object():
+    # It should either be a no-op (generally on Unix, where we don't know
+    # which fds are valid), or an OSError (on Windows, where we currently only
+    # support sockets, so we have to do some validation to figure out whether
+    # it's a socket or a regular handle).
+    got_oserror = False
+    got_no_error = False
+    try:
+        trio.hazmat.notify_closing(-1)
+    except OSError:
+        got_oserror = True
+    else:
+        got_no_error = True
+    assert got_oserror or got_no_error
+
+
+async def test_wait_on_invalid_object():
+    # We definitely want to raise an error everywhere if you pass in an
+    # invalid fd to wait_*
+    for wait in [trio.hazmat.wait_readable, trio.hazmat.wait_writable]:
+        with stdlib_socket.socket() as s:
+            fileno = s.fileno()
+        # We just closed the socket and don't do anything else in between, so
+        # we can be confident that the fileno hasn't be reassigned.
+        with pytest.raises(OSError) as excinfo:
+            await wait(fileno)
+        exc = excinfo.value
+        assert exc.errno == errno.EBADF or exc.winerror == errno.ENOTSOCK
+
+
+async def test_io_manager_statistics():
+    def check(*, expected_readers, expected_writers):
+        statistics = _core.current_statistics()
+        print(statistics)
+        iostats = statistics.io_statistics
+        if iostats.backend in ["epoll", "windows"]:
+            assert iostats.tasks_waiting_read == expected_readers
+            assert iostats.tasks_waiting_write == expected_writers
+        else:
+            assert iostats.backend == "kqueue"
+            assert iostats.tasks_waiting == expected_readers + expected_writers
+
+    a1, b1 = stdlib_socket.socketpair()
+    a2, b2 = stdlib_socket.socketpair()
+    a3, b3 = stdlib_socket.socketpair()
+    for sock in [a1, b1, a2, b2, a3, b3]:
+        sock.setblocking(False)
+    with a1, b1, a2, b2, a3, b3:
+        # let the call_soon_task settle down
+        await wait_all_tasks_blocked()
+
+        # 1 for call_soon_task
+        check(expected_readers=1, expected_writers=0)
+
+        # We want:
+        # - one socket with a writer blocked
+        # - two sockets with a reader blocked
+        # - a socket with both blocked
+        fill_socket(a1)
+        fill_socket(a3)
+        async with _core.open_nursery() as nursery:
+            nursery.start_soon(_core.wait_writable, a1)
+            nursery.start_soon(_core.wait_readable, a2)
+            nursery.start_soon(_core.wait_readable, b2)
+            nursery.start_soon(_core.wait_writable, a3)
+            nursery.start_soon(_core.wait_readable, a3)
+
+            await wait_all_tasks_blocked()
+
+            # +1 for call_soon_task
+            check(expected_readers=3 + 1, expected_writers=2)
+
+            nursery.cancel_scope.cancel()
+
+        # 1 for call_soon_task
+        check(expected_readers=1, expected_writers=0)

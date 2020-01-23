@@ -86,7 +86,7 @@ class _ParkingLotStatistics:
     tasks_waiting = attr.ib()
 
 
-@attr.s(cmp=False, hash=False)
+@attr.s(eq=False, hash=False)
 class ParkingLot:
     """A fair wait queue with cancellation and requeueing.
 
@@ -102,7 +102,7 @@ class ParkingLot:
 
     # {task: None}, we just want a deque where we can quickly delete random
     # items
-    _parked = attr.ib(default=attr.Factory(OrderedDict), init=False)
+    _parked = attr.ib(factory=OrderedDict, init=False)
 
     def __len__(self):
         """Returns the number of parked tasks.

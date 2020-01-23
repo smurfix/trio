@@ -19,7 +19,8 @@ from ._core import (
     TrioInternalError, RunFinishedError, WouldBlock, Cancelled,
     BusyResourceError, ClosedResourceError, MultiError, run, open_nursery,
     CancelScope, current_effective_deadline,
-    TASK_STATUS_IGNORED, current_time, BrokenResourceError, EndOfChannel
+    TASK_STATUS_IGNORED, current_time, BrokenResourceError, EndOfChannel,
+    Nursery
 )
 
 from ._timeouts import (
@@ -33,21 +34,13 @@ from ._sync import (
 
 from ._highlevel_generic import aclose_forcefully, StapledStream
 
-from ._channel import open_memory_channel
+from ._channel import (
+    open_memory_channel, MemorySendChannel, MemoryReceiveChannel
+)
 
 from ._signals import open_signal_receiver
 
 from ._highlevel_socket import SocketStream, SocketListener
-
-import platform
-if platform.python_implementation() != "micro":
-
-    from ._file_io import open_file, wrap_file
-
-    from ._path import Path
-
-    # TODO
-    from ._ssl import SSLStream, SSLListener, NeedHandshakeError
 
 from ._highlevel_serve_listeners import serve_listeners
 
@@ -61,11 +54,13 @@ from ._highlevel_ssl_helpers import (
     open_ssl_over_tcp_stream, open_ssl_over_tcp_listeners, serve_ssl_over_tcp
 )
 
-# Imported by default
 from . import hazmat
 from . import socket
 from . import abc
-# Not imported by default: testing
+from . import from_thread
+from . import to_thread
+# Not imported by default, but mentioned here so static analysis tools like
+# pylint will know that it exists.
 if False:
     from . import testing
 

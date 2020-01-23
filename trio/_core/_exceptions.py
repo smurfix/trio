@@ -16,7 +16,7 @@ class TrioInternalError(Exception):
 
 
 class RunFinishedError(RuntimeError):
-    """Raised by ``run_in_trio_thread`` and similar functions if the
+    """Raised by `trio.from_thread.run` and similar functions if the
     corresponding call to :func:`trio.run` has already finished.
 
     """
@@ -60,7 +60,6 @@ class Cancelled(BaseException):
        everywhere.
 
     """
-
     def __str__(self):
         return "Cancelled"
 

@@ -53,13 +53,12 @@ _FILE_ASYNC_METHODS = {
 class AsyncIOWrapper(AsyncResource):
     """A generic :class:`~io.IOBase` wrapper that implements the :term:`asynchronous
     file object` interface. Wrapped methods that could block are executed in
-    :meth:`trio.run_sync_in_worker_thread`.
+    :meth:`trio.to_thread.run_sync`.
 
     All properties and methods defined in in :mod:`~io` are exposed by this
     wrapper, if they exist in the wrapped file object.
 
     """
-
     def __init__(self, file):
         self._wrapped = file
 
@@ -80,7 +79,7 @@ class AsyncIOWrapper(AsyncResource):
             @async_wraps(self.__class__, self._wrapped.__class__, name)
             async def wrapper(*args, **kwargs):
                 func = partial(meth, *args, **kwargs)
-                return await trio.run_sync_in_worker_thread(func)
+                return await trio.to_thread.run_sync(func)
 
             # cache the generated method
             setattr(self, name, wrapper)
@@ -115,7 +114,7 @@ class AsyncIOWrapper(AsyncResource):
 
         """
 
-        raw = await trio.run_sync_in_worker_thread(self._wrapped.detach)
+        raw = await trio.to_thread.run_sync(self._wrapped.detach)
         return wrap_file(raw)
 
     async def aclose(self):
@@ -128,7 +127,7 @@ class AsyncIOWrapper(AsyncResource):
 
         # ensure the underling file is closed during cancellation
         with trio.CancelScope(shield=True):
-            await trio.run_sync_in_worker_thread(self._wrapped.close)
+            await trio.to_thread.run_sync(self._wrapped.close)
 
         await trio.hazmat.checkpoint_if_cancelled()
 
@@ -165,7 +164,7 @@ async def open_file(
         file = fspath(file)
 
     _file = wrap_file(
-        await trio.run_sync_in_worker_thread(
+        await trio.to_thread.run_sync(
             io.open, file, mode, buffering, encoding, errors, newline, closefd,
             opener
         )
@@ -181,7 +180,7 @@ def wrap_file(file):
         file: a :term:`file object`
 
     Returns:
-        An :term:`asynchronous file object` that wraps `file`
+        An :term:`asynchronous file object` that wraps ``file``
 
     Example::
 
@@ -190,7 +189,6 @@ def wrap_file(file):
         assert await async_file.read() == 'asdf'
 
     """
-
     def has(attr):
         return hasattr(file, attr) and callable(getattr(file, attr))
 

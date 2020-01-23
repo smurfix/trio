@@ -167,6 +167,14 @@ to get feedback on, feel free to submit it as a PR. (In this case it's
 traditional to start the PR title with ``[WIP]``, for "work in
 progress".)
 
+When you are submitting your PR, you can include ``Closes #123``,
+``Fixes: #123`` or
+`some variation <https://help.github.com/en/articles/closing-issues-using-keywords>`__
+in either your commit message or the PR description, in order to
+automatically close the referenced issue when the PR is merged.
+This keeps us closer to the desired state where each open issue reflects some
+work that still needs to be done.
+
 
 .. _pull-request-tests:
 
@@ -176,10 +184,11 @@ Tests
 We use `pytest <https://pytest.org/>`__ for testing. To run the tests
 locally, you should run:
 
-* ``cd path/to/project/checkout/``
-* ``pip install -r test-requirements.txt`` (possibly using a
-  virtualenv)
-* ``pytest <projectname>``
+.. code-block:: shell
+
+   cd path/to/trio/checkout/
+   pip install -r test-requirements.txt  # possibly using a virtualenv
+   pytest trio
 
 This doesn't try to be completely exhaustive – it only checks that
 things work on your machine, and it may skip some slow tests. But it's

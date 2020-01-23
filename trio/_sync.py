@@ -18,7 +18,7 @@ __all__ = [
 ]
 
 
-@attr.s(repr=False, cmp=False, hash=False)
+@attr.s(repr=False, eq=False, hash=False)
 class Event:
     """A waitable boolean value useful for inter-task synchronization,
     inspired by :class:`threading.Event`.
@@ -36,9 +36,16 @@ class Event:
     primitive that doesn't have this protection, consider :class:`Condition`
     or :class:`trio.hazmat.ParkingLot`.
 
+    .. note:: Unlike `threading.Event`, `trio.Event` has no
+       `~threading.Event.clear` method. In Trio, once an `Event` has happened,
+       it cannot un-happen. If you need to represent a series of events,
+       consider creating a new `Event` object for each one (they're cheap!),
+       or other synchronization methods like :ref:`channels <channels>` or
+       `trio.hazmat.ParkingLot`.
+
     """
 
-    _lot = attr.ib(default=attr.Factory(ParkingLot), init=False)
+    _lot = attr.ib(factory=ParkingLot, init=False)
     _flag = attr.ib(default=False, init=False)
 
     def is_set(self):
@@ -54,10 +61,12 @@ class Event:
         self._flag = True
         self._lot.unpark_all()
 
+    @deprecated(
+        "0.12.0",
+        issue=637,
+        instead="multiple Event objects or other synchronization primitives"
+    )
     def clear(self):
-        """Set the internal flag value to False.
-
-        """
         self._flag = False
 
     async def wait(self):
@@ -138,9 +147,9 @@ class CapacityLimiter:
     fixed number of seats, and if they're all taken then you have to wait for
     someone to get up before you can sit down.
 
-    By default, :func:`run_sync_in_worker_thread` uses a
+    By default, :func:`trio.to_thread.run_sync` uses a
     :class:`CapacityLimiter` to limit the number of threads running at once;
-    see :func:`current_default_worker_thread_limiter` for details.
+    see `trio.to_thread.current_default_thread_limiter` for details.
 
     If you're familiar with semaphores, then you can think of this as a
     restricted semaphore that's specialized for one common use case, with
@@ -158,7 +167,6 @@ class CapacityLimiter:
        just borrowed and then put back.
 
     """
-
     def __init__(self, total_tokens):
         self._lot = ParkingLot()
         self._borrowers = set()
@@ -239,7 +247,7 @@ class CapacityLimiter:
         Args:
           borrower: A :class:`trio.hazmat.Task` or arbitrary opaque object
              used to record who is borrowing this token. This is used by
-             :func:`run_sync_in_worker_thread` to allow threads to "hold
+             :func:`trio.to_thread.run_sync` to allow threads to "hold
              tokens", with the intention in the future of using it to `allow
              deadlock detection and other useful things
              <https://github.com/python-trio/trio/issues/182>`__
@@ -295,9 +303,6 @@ class CapacityLimiter:
             except trio.Cancelled:
                 self._pending_borrowers.pop(task)
                 raise
-        except:
-            await trio.hazmat.cancel_shielded_checkpoint()
-            raise
         else:
             await trio.hazmat.cancel_shielded_checkpoint()
 
@@ -381,7 +386,6 @@ class Semaphore:
         ``max_value``.
 
     """
-
     def __init__(self, initial_value, *, max_value=None):
         if not isinstance(initial_value, int):
             raise TypeError("initial_value must be an int")
@@ -488,7 +492,7 @@ class _LockStatistics:
 
 
 @async_cm
-@attr.s(cmp=False, hash=False, repr=False)
+@attr.s(eq=False, hash=False, repr=False)
 class Lock:
     """A classic `mutex
     <https://en.wikipedia.org/wiki/Lock_(computer_science)>`__.
@@ -502,7 +506,7 @@ class Lock:
 
     """
 
-    _lot = attr.ib(default=attr.Factory(ParkingLot), init=False)
+    _lot = attr.ib(factory=ParkingLot, init=False)
     _owner = attr.ib(default=None, init=False)
 
     def __repr__(self):
@@ -654,8 +658,6 @@ class StrictFIFOLock(Lock):
     on this property.
 
     """
-
-
 @attr.s(frozen=True)
 class _ConditionStatistics:
     tasks_waiting = attr.ib()
@@ -677,7 +679,6 @@ class Condition:
           and used.
 
     """
-
     def __init__(self, lock=None):
         if lock is None:
             lock = Lock()

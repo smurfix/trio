@@ -41,7 +41,6 @@ class UnboundedQueue:
            ...
 
     """
-
     def __init__(self):
         self._lot = _core.ParkingLot()
         self._data = []

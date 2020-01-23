@@ -124,113 +124,88 @@ Universally available API
 
 All environments provide the following functions:
 
-.. function:: wait_socket_readable(sock)
+.. function:: wait_readable(obj)
    :async:
 
-   Block until the given :func:`socket.socket` object is readable.
+   Block until the kernel reports that the given object is readable.
 
-   On Unix systems, sockets are fds, and this is identical to
-   :func:`wait_readable`. On Windows, ``SOCKET`` handles and fds are
-   different, and this works on ``SOCKET`` handles or Python socket
-   objects.
+   On Unix systems, ``obj`` must either be an integer file descriptor,
+   or else an object with a ``.fileno()`` method which returns an
+   integer file descriptor. Any kind of file descriptor can be passed,
+   though the exact semantics will depend on your kernel. For example,
+   this probably won't do anything useful for on-disk files.
+
+   On Windows systems, ``obj`` must either be an integer ``SOCKET``
+   handle, or else an object with a ``.fileno()`` method which returns
+   an integer ``SOCKET`` handle. File descriptors aren't supported,
+   and neither are handles that refer to anything besides a
+   ``SOCKET``.
 
    :raises trio.BusyResourceError:
        if another task is already waiting for the given socket to
        become readable.
+   :raises trio.ClosedResourceError:
+       if another task calls :func:`notify_closing` while this
+       function is still working.
 
-.. function:: wait_socket_writable(sock)
+.. function:: wait_writable(obj)
    :async:
 
-   Block until the given :func:`socket.socket` object is writable.
+   Block until the kernel reports that the given object is writable.
 
-   On Unix systems, sockets are fds, and this is identical to
-   :func:`wait_writable`. On Windows, ``SOCKET`` handles and fds are
-   different, and this works on ``SOCKET`` handles or Python socket
-   objects.
+   See `wait_readable` for the definition of ``obj``.
 
    :raises trio.BusyResourceError:
        if another task is already waiting for the given socket to
        become writable.
    :raises trio.ClosedResourceError:
-       if another task calls :func:`notify_socket_close` while this
+       if another task calls :func:`notify_closing` while this
        function is still working.
 
 
-.. function:: notify_socket_close(sock)
+.. function:: notify_closing(obj)
 
-   Notifies Trio's internal I/O machinery that you are about to close
-   a socket.
+   Call this before closing a file descriptor (on Unix) or socket (on
+   Windows). This will cause any `wait_readable` or `wait_writable`
+   calls on the given object to immediately wake up and raise
+   `~trio.ClosedResourceError`.
 
-   This causes any operations currently waiting for this socket to
-   immediately raise :exc:`~trio.ClosedResourceError`.
+   This doesn't actually close the object – you still have to do that
+   yourself afterwards. Also, you want to be careful to make sure no
+   new tasks start waiting on the object in between when you call this
+   and when it's actually closed. So to close something properly, you
+   usually want to do these steps in order:
 
-   This does *not* actually close the socket. Generally when closing a
-   socket, you should first call this function, and then close the
-   socket.
+   1. Explicitly mark the object as closed, so that any new attempts
+      to use it will abort before they start.
+   2. Call `notify_closing` to wake up any already-existing users.
+   3. Actually close the object.
 
-   On Unix systems, sockets are fds, and this is identical to
-   :func:`notify_fd_close`. On Windows, ``SOCKET`` handles and fds are
-   different, and this works on ``SOCKET`` handles or Python socket
-   objects.
+   It's also possible to do them in a different order if that's more
+   convenient, *but only if* you make sure not to have any checkpoints in
+   between the steps. This way they all happen in a single atomic
+   step, so other tasks won't be able to tell what order they happened
+   in anyway.
 
 
 Unix-specific API
 -----------------
 
-Unix-like systems provide the following functions:
+`FdStream` supports wrapping Unix files (such as a pipe or TTY) as
+a stream.
 
-.. function:: wait_readable(fd)
-   :async:
+If you have two different file descriptors for sending and receiving,
+and want to bundle them together into a single bidirectional
+`~trio.abc.Stream`, then use `trio.StapledStream`::
 
-   Block until the given file descriptor is readable.
+    bidirectional_stream = trio.StapledStream(
+        trio.hazmat.FdStream(write_fd),
+        trio.hazmat.FdStream(read_fd)
+    )
 
-   .. warning::
-
-      This is "readable" according to the operating system's
-      definition of readable. In particular, it probably won't tell
-      you anything useful for on-disk files.
-
-   :arg fd:
-       integer file descriptor, or else an object with a ``fileno()`` method
-   :raises trio.BusyResourceError:
-       if another task is already waiting for the given fd to
-       become readable.
-   :raises trio.ClosedResourceError:
-       if another task calls :func:`notify_fd_close` while this
-       function is still working.
-
-
-.. function:: wait_writable(fd)
-   :async:
-
-   Block until the given file descriptor is writable.
-
-   .. warning::
-
-      This is "writable" according to the operating system's
-      definition of writable. In particular, it probably won't tell
-      you anything useful for on-disk files.
-
-   :arg fd:
-       integer file descriptor, or else an object with a ``fileno()`` method
-   :raises trio.BusyResourceError:
-       if another task is already waiting for the given fd to
-       become writable.
-   :raises trio.ClosedResourceError:
-       if another task calls :func:`notify_fd_close` while this
-       function is still working.
-
-.. function:: notify_fd_close(fd)
-
-   Notifies Trio's internal I/O machinery that you are about to close
-   a file descriptor.
-
-   This causes any operations currently waiting for this file
-   descriptor to immediately raise :exc:`~trio.ClosedResourceError`.
-
-   This does *not* actually close the file descriptor. Generally when
-   closing a file descriptor, you should first call this function, and
-   then actually close it.
+.. autoclass:: FdStream
+   :show-inheritance:
+   :members:
 
 
 Kqueue-specific API
@@ -298,6 +273,47 @@ Trio tokens
 .. autofunction:: current_trio_token
 
 
+Safer KeyboardInterrupt handling
+================================
+
+Trio on "regular" Python is designed to handle Control-C in a way that
+balances usability and safety. Unfortunately, that code could not be ported
+safely to MicroPython.
+
+These decorators are thus no-ops:
+
+.. function:: disable_ki_protection()
+   :decorator:
+
+   Decorator that marks the given regular function, generator
+   function, async function, or async generator function as
+   unprotected against :exc:`KeyboardInterrupt`, i.e., the code inside
+   this function *can* be rudely interrupted by
+   :exc:`KeyboardInterrupt` at any moment.
+
+.. function:: enable_ki_protection()
+   :decorator:
+
+   Decorator that marks the given regular function, generator
+   function, async function, or async generator function as protected
+   against :exc:`KeyboardInterrupt`, i.e., the code inside this
+   function *won't* be rudely interrupted by
+   :exc:`KeyboardInterrupt`. (Though if it contains any
+   :ref:`checkpoints <checkpoints>`, then it can still receive
+   :exc:`KeyboardInterrupt` at those. This is considered a polite
+   interruption.)
+
+   .. warning::
+
+      Be very careful to only use this decorator on functions that you
+      know will either exit in bounded time, or else pass through a
+      checkpoint regularly. (Of course all of your functions should
+      have this property, but if you mess it up here then you won't
+      even be able to use control-C to escape!)
+
+.. autofunction:: currently_ki_protected
+
+
 Sleeping and waking
 ===================
 
@@ -330,10 +346,6 @@ checkpoint semantics. Example::
        except BlockingIOError:
            # need to block and then retry, which we do below
            pass
-       except:
-           # some other error, finish the checkpoint then let it propagate
-           await cancel_shielded_checkpoint()
-           raise
        else:
            # operation succeeded, finish the checkpoint then return
            await cancel_shielded_checkpoint()
@@ -347,13 +359,13 @@ checkpoint semantics. Example::
 
 This logic is a bit convoluted, but accomplishes all of the following:
 
-* Every execution path passes through a checkpoint (assuming that
+* Every successful execution path passes through a checkpoint (assuming that
   ``wait_for_operation_to_be_ready`` is an unconditional checkpoint)
 
 * Our :ref:`cancellation semantics <cancellable-primitives>` say that
   :exc:`~trio.Cancelled` should only be raised if the operation didn't
   happen. Using :func:`cancel_shielded_checkpoint` on the early-exit
-  branches accomplishes this.
+  branch accomplishes this.
 
 * On the path where we do end up blocking, we don't pass through any
   schedule points before that, which avoids some unnecessary work.
@@ -364,8 +376,8 @@ This logic is a bit convoluted, but accomplishes all of the following:
   loop outside of the ``except BlockingIOError:`` block.
 
 These functions can also be useful in other situations. For example,
-when :func:`trio.run_sync_in_worker_thread` schedules some work to run
-in a worker thread, it blocks until the work is finished (so it's a
+when :func:`trio.to_thread.run_sync` schedules some work to run in a
+worker thread, it blocks until the work is finished (so it's a
 schedule point), but by default it doesn't allow cancellation. So to
 make sure that the call always acts as a checkpoint, it calls
 :func:`checkpoint_if_cancelled` before starting the thread.

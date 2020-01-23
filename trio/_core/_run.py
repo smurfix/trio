@@ -45,30 +45,10 @@ from ._traps import (
 )
 from .. import _core
 
-# At the bottom of this file there's also some "clever" code that generates
-# wrapper functions for runner and io manager methods, and adds them to
-# __all__. These are all re-exported as part of the 'trio' or 'trio.hazmat'
-# namespaces.
-__all__ = [
-    "Task", "run", "open_nursery", "CancelScope",
-    "checkpoint", "current_task", "current_effective_deadline",
-    "checkpoint_if_cancelled", "TASK_STATUS_IGNORED"
-]
-
 class _Ctx:
     pass
 GLOBAL_RUN_CONTEXT = _Ctx()
-
-if os.name == "nt":
-    from ._io_windows import WindowsIOManager as TheIOManager
-elif not hasattr(select, "select"):
-    from ._io_uselect import USelectIOManager as TheIOManager
-elif hasattr(select, "epoll"):
-    from ._io_epoll import EpollIOManager as TheIOManager
-elif hasattr(select, "kqueue"):
-    from ._io_kqueue import KqueueIOManager as TheIOManager
-else:  # pragma: no cover
-    raise NotImplementedError("unsupported platform")
+_NO_SEND = object()
 
 # When running under Hypothesis, we want examples to be reproducible and
 # shrinkable.  pytest-trio's Hypothesis integration monkeypatches this
@@ -82,12 +62,12 @@ _r = random.Random()
 INSTRUMENT_LOGGER = logging.getLogger("trio.abc.Instrument")
 
 
-@attr.s(frozen=True)
+@attr.s(frozen=True, slots=True)
 class SystemClock:
     # Add a large random offset to our clock to ensure that if people
     # accidentally call time.perf_counter() directly or start comparing clocks
     # between different runs, then they'll notice the bug quickly:
-    offset = attr.ib(default=attr.Factory(lambda: _r.uniform(10000, 200000)))
+    offset = attr.ib(factory=lambda: _r.uniform(10000, 200000))
 
     def start_clock(self):
         pass
@@ -107,6 +87,7 @@ class SystemClock:
 ################################################################
 
 
+@attr.s(eq=False, slots=True)
 class CancelStatus:
     """Tracks the cancellation status for a contiguous extent
     of code that will become cancelled, or not, as a unit.
@@ -154,7 +135,8 @@ class CancelStatus:
     # The CancelStatus whose cancellations can propagate to us; we
     # become effectively cancelled when they do, unless scope.shield
     # is True.  May be None (for the outermost CancelStatus in a call
-    # to trio.run(), or briefly during TaskStatus.started()).
+    # to trio.run(), briefly during TaskStatus.started(), or during
+    # recovery from mis-nesting of cancel scopes).
     _parent = None
 
     # All of the CancelStatuses that have this CancelStatus as their parent.
@@ -166,6 +148,8 @@ class CancelStatus:
     # Invariant: all(task._cancel_status is self for task in self._tasks)
     _tasks = attr.ib(factory=set, init=False, repr=False)
 
+    abandoned_by_misnesting = attr.ib(default=False, init=False, repr=False)
+
     def __init__(self, parent, scope):
         self._parent = parent
         self._scope = scope
@@ -174,6 +158,7 @@ class CancelStatus:
 
         if parent is not None:
             parent._children.add(self)
+
             self.recalculate()
 
     # parent/children/tasks accessors are used by TaskStatus.started()
@@ -199,9 +184,43 @@ class CancelStatus:
     def tasks(self):
         return frozenset(self._tasks)
 
+    def encloses(self, other):
+        """Returns true if this cancel status is a direct or indirect
+        parent of cancel status *other*, or if *other* is *self*.
+        """
+        while other is not None:
+            if other is self:
+                return True
+            other = other.parent
+        return False
+
     def close(self):
-        assert not self._tasks and not self._children
         self.parent = None  # now we're not a child of self.parent anymore
+        if self._tasks or self._children:
+            # Cancel scopes weren't exited in opposite order of being
+            # entered. CancelScope._close() deals with raising an error
+            # if appropriate; our job is to leave things in a reasonable
+            # state for unwinding our dangling children. We choose to leave
+            # this part of the CancelStatus tree unlinked from everyone
+            # else, cancelled, and marked so that exiting a CancelScope
+            # within the abandoned subtree doesn't affect the active
+            # CancelStatus. Note that it's possible for us to get here
+            # without CancelScope._close() raising an error, if a
+            # nursery's cancel scope is closed within the nursery's
+            # nested child and no other cancel scopes are involved,
+            # but in that case task_exited() will deal with raising
+            # the error.
+            self._mark_abandoned()
+
+            # Since our CancelScope is about to forget about us, and we
+            # have no parent anymore, there's nothing left to call
+            # recalculate(). So, we can stay cancelled by setting
+            # effectively_cancelled and updating our children.
+            self.effectively_cancelled = True
+            for task in self._tasks:
+                task._attempt_delivery_of_any_pending_cancel()
+            for child in self._children:
+                child.recalculate()
 
     @property
     def parent_cancellation_is_visible_to_us(self):
@@ -211,17 +230,28 @@ class CancelStatus:
         )
 
     def recalculate(self):
-        new_state = (
-            self._scope.cancel_called
-            or self.parent_cancellation_is_visible_to_us
-        )
-        if new_state != self.effectively_cancelled:
-            self.effectively_cancelled = new_state
-            if new_state:
-                for task in self._tasks:
-                    task._attempt_delivery_of_any_pending_cancel()
-            for child in self._children:
-                child.recalculate()
+        # This does a depth-first traversal over this and descendent cancel
+        # statuses, to ensure their state is up-to-date. It's basically a
+        # recursive algorithm, but we use an explicit stack to avoid any
+        # issues with stack overflow.
+        todo = [self]
+        while todo:
+            current = todo.pop()
+            new_state = (
+                current._scope.cancel_called
+                or current.parent_cancellation_is_visible_to_us
+            )
+            if new_state != current.effectively_cancelled:
+                current.effectively_cancelled = new_state
+                if new_state:
+                    for task in current._tasks:
+                        task._attempt_delivery_of_any_pending_cancel()
+                todo.extend(current._children)
+
+    def _mark_abandoned(self):
+        self.abandoned_by_misnesting = True
+        for child in self._children:
+            child._mark_abandoned()
 
     def effective_deadline(self):
         if self.effectively_cancelled:
@@ -231,6 +261,31 @@ class CancelStatus:
         return min(self._scope.deadline, self._parent.effective_deadline())
 
 
+MISNESTING_ADVICE = """
+This is probably a bug in your code, that has caused Trio's internal state to
+become corrupted. We'll do our best to recover, but from now on there are
+no guarantees.
+
+Typically this is caused by one of the following:
+  - yielding within a generator or async generator that's opened a cancel
+    scope or nursery (unless the generator is a @contextmanager or
+    @asynccontextmanager); see https://github.com/python-trio/trio/issues/638
+  - manually calling __enter__ or __exit__ on a trio.CancelScope, or
+    __aenter__ or __aexit__ on the object returned by trio.open_nursery();
+    doing so correctly is difficult and you should use @[async]contextmanager
+    instead, or maybe [Async]ExitStack
+  - using [Async]ExitStack to interleave the entries/exits of cancel scopes
+    and/or nurseries in a way that couldn't be achieved by some nesting of
+    'with' and 'async with' blocks
+  - using the low-level coroutine object protocol to execute some parts of
+    an async function in a different cancel scope/nursery context than
+    other parts
+If you don't believe you're doing any of these things, please file a bug:
+https://github.com/python-trio/trio/issues/new
+"""
+
+
+@attr.s(eq=False, repr=False, slots=True)
 class CancelScope:
     """A *cancellation scope*: the link between a unit of cancellable
     work and Trio's cancellation system.
@@ -304,13 +359,60 @@ class CancelScope:
         return exc
 
     def _close(self, exc):
+        if self._cancel_status is None:
+            new_exc = RuntimeError(
+                "Cancel scope stack corrupted: attempted to exit {!r} "
+                "which had already been exited".format(self)
+            )
+            new_exc.__context__ = exc
+            return new_exc
         scope_task = current_task()
+        if scope_task._cancel_status is not self._cancel_status:
+            # Cancel scope mis-nesting: this cancel scope isn't the most
+            # recently opened by this task (that's still open). That is,
+            # our assumptions about context managers forming a stack
+            # have been violated. Try and make the best of it.
+            if self._cancel_status.abandoned_by_misnesting:
+                # We are an inner cancel scope that was still active when
+                # some outer scope was closed. The closure of that outer
+                # scope threw an error, so we don't need to throw another
+                # one; it would just confuse the traceback.
+                pass
+            elif not self._cancel_status.encloses(scope_task._cancel_status):
+                # This task isn't even indirectly contained within the
+                # cancel scope it's trying to close. Raise an error
+                # without changing any state.
+                new_exc = RuntimeError(
+                    "Cancel scope stack corrupted: attempted to exit {!r} "
+                    "from unrelated {!r}\n{}".format(
+                        self, scope_task, MISNESTING_ADVICE
+                    )
+                )
+                new_exc.__context__ = exc
+                return new_exc
+            else:
+                # Otherwise, there's some inner cancel scope(s) that
+                # we're abandoning by closing this outer one.
+                # CancelStatus.close() will take care of the plumbing;
+                # we just need to make sure we don't let the error
+                # pass silently.
+                new_exc = RuntimeError(
+                    "Cancel scope stack corrupted: attempted to exit {!r} "
+                    "in {!r} that's still within its child {!r}\n{}".format(
+                        self, scope_task, scope_task._cancel_status._scope,
+                        MISNESTING_ADVICE
+                    )
+                )
+                new_exc.__context__ = exc
+                exc = new_exc
+                scope_task._activate_cancel_status(self._cancel_status.parent)
+        else:
+            scope_task._activate_cancel_status(self._cancel_status.parent)
         if (
-            exc is not None
+            exc is not None and self._cancel_status.effectively_cancelled
             and not self._cancel_status.parent_cancellation_is_visible_to_us
         ):
             exc = MultiError.filter(self._exc_filter, exc)
-        scope_task._activate_cancel_status(self._cancel_status.parent)
         self._cancel_status.close()
         with self._might_change_registered_deadline():
             self._cancel_status = None
@@ -498,7 +600,7 @@ class CancelScope:
 
 # This code needs to be read alongside the code from Nursery.start to make
 # sense.
-@attr.s(cmp=False, hash=False, repr=False)
+@attr.s(eq=False, hash=False, repr=False)
 class _TaskStatus:
     _old_nursery = attr.ib()
     _new_nursery = attr.ib()
@@ -571,11 +673,10 @@ class NurseryManager:
     and StopAsyncIteration.
 
     """
-
     async def __aenter__(self):
         self._scope = CancelScope()
         self._scope.__enter__()
-        self._nursery = Nursery(current_task(), self._scope)
+        self._nursery = Nursery._create(current_task(), self._scope)
         return self._nursery
 
     async def __aexit__(self, etype, exc, tb):
@@ -603,7 +704,7 @@ class NurseryManager:
 
 def open_nursery():
     """Returns an async context manager which must be used to create a
-    new ``Nursery``.
+    new `Nursery`.
 
     It does not block on entry; on exit it blocks until all child tasks
     have exited.
@@ -612,7 +713,27 @@ def open_nursery():
     return NurseryManager()
 
 
-class Nursery:
+class Nursery(metaclass=NoPublicConstructor):
+    """A context which may be used to spawn (or cancel) child tasks.
+
+    Not constructed directly, use `open_nursery` instead.
+
+    The nursery will remain open until all child tasks have completed,
+    or until it is cancelled, at which point it will cancel all its
+    remaining child tasks and close.
+
+    Nurseries ensure the absence of orphaned Tasks, since all running
+    tasks will belong to an open Nursery.
+
+    Attributes:
+        cancel_scope:
+            Creating a nursery also implicitly creates a cancellation scope,
+            which is exposed as the :attr:`cancel_scope` attribute. This is
+            used internally to implement the logic where if an error occurs
+            then ``__aexit__`` cancels all children, but you can use it for
+            other things, e.g. if you want to explicitly cancel all children
+            in response to some external event.
+    """
     def __init__(self, parent_task, cancel_scope):
         self._parent_task = parent_task
         parent_task._child_nurseries.append(self)
@@ -635,10 +756,13 @@ class Nursery:
 
     @property
     def child_tasks(self):
+        """(`frozenset`): Contains all the child :class:`~trio.hazmat.Task`
+        objects which are still running."""
         return frozenset(self._children)
 
     @property
     def parent_task(self):
+        "(`~trio.hazmat.Task`):  The Task that opened this nursery."
         return self._parent_task
 
     def _add_exc(self, exc):
@@ -692,9 +816,92 @@ class Nursery:
             return MultiError(self._pending_excs)
 
     def start_soon(self, async_fn, *args, name=None):
+        """ Creates a child task, scheduling ``await async_fn(*args)``.
+
+        This and :meth:`start` are the two fundamental methods for
+        creating concurrent tasks in Trio.
+
+        Note that this is *not* an async function and you don't use await
+        when calling it. It sets up the new task, but then returns
+        immediately, *before* it has a chance to run. The new task won’t
+        actually get a chance to do anything until some later point when
+        you execute a checkpoint and the scheduler decides to run it.
+        If you want to run a function and immediately wait for its result,
+        then you don't need a nursery; just use ``await async_fn(*args)``.
+        If you want to wait for the task to initialize itself before
+        continuing, see :meth:`start()`.
+
+        It's possible to pass a nursery object into another task, which
+        allows that task to start new child tasks in the first task's
+        nursery.
+
+        The child task inherits its parent nursery's cancel scopes.
+
+        Args:
+            async_fn: An async callable.
+            args: Positional arguments for ``async_fn``. If you want
+                  to pass keyword arguments, use
+                  :func:`functools.partial`.
+            name: The name for this task. Only used for
+                  debugging/introspection
+                  (e.g. ``repr(task_obj)``). If this isn't a string,
+                  :meth:`start_soon` will try to make it one. A
+                  common use case is if you're wrapping a function
+                  before spawning a new task, you might pass the
+                  original function as the ``name=`` to make
+                  debugging easier.
+
+        Returns:
+            True if successful, False otherwise.
+
+        Raises:
+            RuntimeError: If this nursery is no longer open
+                          (i.e. its ``async with`` block has
+                          exited).
+        """
         GLOBAL_RUN_CONTEXT.runner.spawn_impl(async_fn, args, self, name)
 
     async def start(self, async_fn, *args, name=None):
+        r""" Creates and initalizes a child task.
+
+        Like :meth:`start_soon`, but blocks until the new task has
+        finished initializing itself, and optionally returns some
+        information from it.
+
+        The ``async_fn`` must accept a ``task_status`` keyword argument,
+        and it must make sure that it (or someone) eventually calls
+        ``task_status.started()``.
+
+        The conventional way to define ``async_fn`` is like::
+
+            async def async_fn(arg1, arg2, \*, task_status=trio.TASK_STATUS_IGNORED):
+                ...
+                task_status.started()
+                ...
+
+        :attr:`trio.TASK_STATUS_IGNORED` is a special global object with
+        a do-nothing ``started`` method. This way your function supports
+        being called either like ``await nursery.start(async_fn, arg1,
+        arg2)`` or directly like ``await async_fn(arg1, arg2)``, and
+        either way it can call ``task_status.started()`` without
+        worrying about which mode it's in. Defining your function like
+        this will make it obvious to readers that it supports being used
+        in both modes.
+
+        Before the child calls ``task_status.started()``, it's
+        effectively run underneath the call to :meth:`start`: if it
+        raises an exception then that exception is reported by
+        :meth:`start`, and does *not* propagate out of the nursery. If
+        :meth:`start` is cancelled, then the child task is also
+        cancelled.
+
+        When the child calls ``task_status.started()``, it's moved from
+        out from underneath :meth:`start` and into the given nursery.
+
+        If the child task passes a value to
+        ``task_status.started(value)``, then :meth:`start` returns this
+        value. Otherwise it returns ``None``.
+        """
         if self._closed:
             raise RuntimeError("Nursery is closed to new arrivals")
         try:
@@ -726,7 +933,7 @@ class Nursery:
 ################################################################
 
 
-@attr.s(cmp=False, hash=False, repr=False)
+@attr.s(eq=False, hash=False, repr=False)
 class Task:
     _parent_nursery = attr.ib()
     coro = attr.ib()
@@ -737,19 +944,26 @@ class Task:
     _counter = attr.ib(init=False, factory=itertools.count().__next__)
 
     # Invariant:
-    # - for unscheduled tasks, _next_send is None
-    # - for scheduled tasks, _next_send is an Outcome object,
-    #   and custom_sleep_data is None
+    # - for unscheduled tasks, _next_send_fn and _next_send are both None
+    # - for scheduled tasks, _next_send_fn(_next_send) resumes the task;
+    #   usually _next_send_fn is self.coro.send and _next_send is an
+    #   Outcome. When recovering from a foreign await, _next_send_fn is
+    #   self.coro.throw and _next_send is an exception. _next_send_fn
+    #   will effectively be at the top of every task's call stack, so
+    #   it should be written in C if you don't want to pollute Trio
+    #   tracebacks with extraneous frames.
+    # - for scheduled tasks, custom_sleep_data is None
     # Tasks start out unscheduled.
+    _next_send_fn = attr.ib(default=None)
     _next_send = attr.ib(default=None)
     _abort_func = attr.ib(default=None)
     custom_sleep_data = attr.ib(default=None)
 
     # For introspection and nursery.start()
-    _child_nurseries = attr.ib(default=attr.Factory(list))
+    _child_nurseries = attr.ib(factory=list)
 
     # these are counts of how many cancel/schedule points this task has
-    # executed, for assert{_no,}_yields
+    # executed, for assert{_no,}_checkpoints
     # XX maybe these should be exposed as part of a statistics() method?
     _cancel_points = attr.ib(default=0)
     _schedule_points = attr.ib(default=0)
@@ -824,6 +1038,8 @@ class Task:
 # The central Runner object
 ################################################################
 
+GLOBAL_RUN_CONTEXT = threading.local()
+
 
 @attr.s(frozen=True)
 class _RunStatistics:
@@ -834,22 +1050,22 @@ class _RunStatistics:
     run_sync_soon_queue_size = attr.ib()
 
 
-@attr.s(cmp=False, hash=False)
+@attr.s(eq=False, hash=False)
 class Runner:
     clock = attr.ib()
     instruments = attr.ib()
     io_manager = attr.ib()
 
     # Run-local values, see _local.py
-    _locals = attr.ib(default=attr.Factory(dict))
+    _locals = attr.ib(factory=dict)
 
-    runq = attr.ib(default=attr.Factory(deque))
-    tasks = attr.ib(default=attr.Factory(set))
+    runq = attr.ib(factory=deque)
+    tasks = attr.ib(factory=set)
 
     # {(deadline, id(CancelScope)): CancelScope}
     # only contains scopes with non-infinite deadlines that are currently
     # attached to at least one task
-    deadlines = attr.ib(default=attr.Factory(SortedDict))
+    deadlines = attr.ib(factory=SortedDict)
 
     init_task = attr.ib(default=None)
     system_nursery = attr.ib(default=None)
@@ -857,10 +1073,8 @@ class Runner:
     main_task = attr.ib(default=None)
     main_task_outcome = attr.ib(default=None)
 
-    entry_queue = attr.ib(default=attr.Factory(EntryQueue))
+    entry_queue = attr.ib(factory=EntryQueue)
     trio_token = attr.ib(default=None)
-
-    _NO_SEND = object()
 
     def close(self):
         self.io_manager.close()
@@ -947,16 +1161,17 @@ class Runner:
 
         Args:
           task (trio.hazmat.Task): the task to be rescheduled. Must be blocked
-            in a call to :func:`wait_task_rescheduled`.
+              in a call to :func:`wait_task_rescheduled`.
           next_send (outcome.Outcome): the value (or error) to return (or
-            raise) from :func:`wait_task_rescheduled`.
+              raise) from :func:`wait_task_rescheduled`.
 
         """
-        if next_send is self._NO_SEND:
+        if next_send is _NO_SEND:
             next_send = Value(None)
 
         assert task._runner is self
-        assert task._next_send is None
+        assert task._next_send_fn is None
+        task._next_send_fn = task.coro.send
         task._next_send = next_send
         task._abort_func = None
         task.custom_sleep_data = None
@@ -1055,6 +1270,16 @@ class Runner:
         else:
             context = copy_context()
 
+        if not hasattr(coro, "cr_frame"):
+            # This async function is implemented in C or Cython
+            async def python_wrapper(orig_coro):
+                return await orig_coro
+
+            coro = python_wrapper(coro)
+        coro.cr_frame.f_locals.setdefault(
+            LOCALS_KEY_KI_PROTECTION_ENABLED, system_task
+        )
+
         task = Task(
             coro=coro,
             parent_nursery=nursery,
@@ -1062,11 +1287,8 @@ class Runner:
             name=name,
             context=context,
         )
-        self.tasks.add(task)
-#        coro.cr_frame.f_locals.setdefault(
-#            LOCALS_KEY_KI_PROTECTION_ENABLED, system_task
-#        )
 
+        self.tasks.add(task)
         if nursery is not None:
             nursery._children.add(task)
             task._activate_cancel_status(nursery._cancel_status)
@@ -1079,6 +1301,29 @@ class Runner:
         return task
 
     def task_exited(self, task, outcome):
+        if (
+            task._cancel_status is not None
+            and task._cancel_status.abandoned_by_misnesting
+            and task._cancel_status.parent is None
+        ):
+            # The cancel scope surrounding this task's nursery was closed
+            # before the task exited. Force the task to exit with an error,
+            # since the error might not have been caught elsewhere. See the
+            # comments in CancelStatus.close().
+            try:
+                # Raise this, rather than just constructing it, to get a
+                # traceback frame included
+                raise RuntimeError(
+                    "Cancel scope stack corrupted: cancel scope surrounding "
+                    "{!r} was closed before the task exited\n{}".format(
+                        task, MISNESTING_ADVICE
+                    )
+                )
+            except RuntimeError as new_exc:
+                if isinstance(outcome, Error):
+                    new_exc.__context__ = outcome.error
+                outcome = Error(new_exc)
+
         task._activate_cancel_status(None)
         self.tasks.remove(task)
         if task is self.main_task:
@@ -1136,7 +1381,6 @@ class Runner:
           Task: the newly spawned task
 
         """
-
         return self.spawn_impl(
             async_fn, args, self.system_nursery, name, system_task=True
         )
@@ -1170,7 +1414,7 @@ class Runner:
     # Quiescing
     ################
 
-    waiting_for_idle = attr.ib(default=attr.Factory(SortedDict))
+    waiting_for_idle = attr.ib(factory=SortedDict)
 
     async def wait_all_tasks_blocked(self, cushion=0.0, tiebreaker=0):
         """Block until there are no runnable tasks.
@@ -1495,8 +1739,9 @@ def run_impl(runner, async_fn, args):
             if runner.instruments:
                 runner.instrument("before_task_step", task)
 
+            next_send_fn = task._next_send_fn
             next_send = task._next_send
-            task._next_send = None
+            task._next_send_fn = task._next_send = None
             final_outcome = None
             try:
                 # We used to unwrap the Outcome object here and send/throw its
@@ -1506,7 +1751,7 @@ def run_impl(runner, async_fn, args):
                 #   https://bugs.python.org/issue29590
                 # So now we send in the Outcome object and unwrap it on the
                 # other side.
-                msg = task.context.run(task.coro.send, next_send)
+                msg = task.context.run(next_send_fn, next_send)
             except StopIteration as stop_iteration:
                 final_outcome = Value(stop_iteration.value)
             except BaseException as task_exc:
@@ -1542,16 +1787,12 @@ def run_impl(runner, async_fn, args):
                         "other framework like asyncio? That won't work "
                         "without some kind of compatibility shim.".format(msg)
                     )
-                    # How can we resume this task? It's blocked in code we
-                    # don't control, waiting for some message that we know
-                    # nothing about. We *could* try using coro.throw(...) to
-                    # blast an exception in and hope that it propagates out,
-                    # but (a) that's complicated because we aren't set up to
-                    # resume a task via .throw(), and (b) even if we did,
-                    # there's no guarantee that the foreign code will respond
-                    # the way we're hoping. So instead we abandon this task
-                    # and propagate the exception into the task's spawner.
-                    runner.task_exited(task, Error(exc))
+                    # The foreign library probably doesn't adhere to our
+                    # protocol of unwrapping whatever outcome gets sent in.
+                    # Instead, we'll arrange to throw `exc` in directly,
+                    # which works for at least asyncio and curio.
+                    runner.reschedule(task, exc)
+                    task._next_send_fn = task.coro.throw
 
             if runner.instruments:
                 runner.instrument("after_task_step", task)
@@ -1655,20 +1896,19 @@ async def checkpoint_if_cancelled():
     task._cancel_points += 1
 
 
-def _generate_method_wrappers(cls, instance):
-    for methname in dir(cls):
-        if methname[0] == '_':
-            continue
-        fn = getattr(cls, methname)
-        if callable(fn):
-            def _calling(methname):
-                def call(*args, **kwargs):
-                    return getattr(instance(), methname)(*args, **kwargs)
-                return call
+if os.name == "nt":
+    from ._io_windows import WindowsIOManager as TheIOManager
+    from ._generated_io_windows import *
+ elif not hasattr(select, "select"):
+    from ._io_uselect import USelectIOManager as TheIOManager
+elif hasattr(select, "epoll"):
+    from ._io_epoll import EpollIOManager as TheIOManager
+    from ._generated_io_epoll import *
+elif hasattr(select, "kqueue"):
+    from ._io_kqueue import KqueueIOManager as TheIOManager
+    from ._generated_io_kqueue import *
+else:  # pragma: no cover
+    raise NotImplementedError("unsupported platform")
 
-            globals()[methname] = _calling(methname)
-            __all__.append(methname)
+from ._generated_run import *
 
-
-_generate_method_wrappers(Runner, lambda: GLOBAL_RUN_CONTEXT.runner)
-_generate_method_wrappers(TheIOManager, lambda: GLOBAL_RUN_CONTEXT.runner.io_manager)

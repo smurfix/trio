@@ -3,6 +3,9 @@ from ._abc import SendStream, ReceiveStream
 from ._util import ConflictDetector
 from ._core._windows_cffi import _handle, raise_winerror, kernel32, ffi
 
+# XX TODO: don't just make this up based on nothing.
+DEFAULT_RECEIVE_SIZE = 65536
+
 
 # See the comments on _unix_pipes._FdHolder for discussion of why we set the
 # handle to -1 when it's closed.
@@ -38,7 +41,6 @@ class PipeSendStream(SendStream):
     """Represents a send stream over a Windows named pipe that has been
     opened in OVERLAPPED mode.
     """
-
     def __init__(self, handle: int) -> None:
         self._handle_holder = _HandleHolder(handle)
         self._conflict_detector = ConflictDetector(
@@ -46,11 +48,12 @@ class PipeSendStream(SendStream):
         )
 
     async def send_all(self, data: bytes):
-        async with self._conflict_detector:
+        with self._conflict_detector:
             if self._handle_holder.closed:
                 raise _core.ClosedResourceError("this pipe is already closed")
 
             if not data:
+                await _core.checkpoint()
                 return
 
             try:
@@ -65,11 +68,12 @@ class PipeSendStream(SendStream):
             assert written == len(data)
 
     async def wait_send_all_might_not_block(self) -> None:
-        async with self._conflict_detector:
+        with self._conflict_detector:
             if self._handle_holder.closed:
                 raise _core.ClosedResourceError("This pipe is already closed")
 
             # not implemented yet, and probably not needed
+            await _core.checkpoint()
 
     async def aclose(self):
         await self._handle_holder.aclose()
@@ -77,23 +81,24 @@ class PipeSendStream(SendStream):
 
 class PipeReceiveStream(ReceiveStream):
     """Represents a receive stream over an os.pipe object."""
-
     def __init__(self, handle: int) -> None:
         self._handle_holder = _HandleHolder(handle)
         self._conflict_detector = ConflictDetector(
             "another task is currently using this pipe"
         )
 
-    async def receive_some(self, max_bytes: int) -> bytes:
-        async with self._conflict_detector:
+    async def receive_some(self, max_bytes=None) -> bytes:
+        with self._conflict_detector:
             if self._handle_holder.closed:
                 raise _core.ClosedResourceError("this pipe is already closed")
 
-            if not isinstance(max_bytes, int):
-                raise TypeError("max_bytes must be integer >= 1")
-
-            if max_bytes < 1:
-                raise ValueError("max_bytes must be integer >= 1")
+            if max_bytes is None:
+                max_bytes = DEFAULT_RECEIVE_SIZE
+            else:
+                if not isinstance(max_bytes, int):
+                    raise TypeError("max_bytes must be integer >= 1")
+                if max_bytes < 1:
+                    raise ValueError("max_bytes must be integer >= 1")
 
             buffer = bytearray(max_bytes)
             try:
@@ -110,6 +115,12 @@ class PipeReceiveStream(ReceiveStream):
                 # whenever the other end closes, regardless of direction.
                 # Convert this to the Unix behavior of returning EOF to the
                 # reader when the writer closes.
+                #
+                # And since we're not raising an exception, we have to
+                # checkpoint. But readinto_overlapped did raise an exception,
+                # so it might not have checkpointed for us. So we have to
+                # checkpoint manually.
+                await _core.checkpoint()
                 return b""
             else:
                 del buffer[size:]

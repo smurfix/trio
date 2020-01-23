@@ -7,8 +7,8 @@
    :alt: Join forum
 
 .. image:: https://img.shields.io/badge/docs-read%20now-blue.svg
-   :target: https://trio.readthedocs.io/en/latest/?badge=latest
-   :alt: Documentation Status
+   :target: https://trio.readthedocs.io
+   :alt: Documentation
    
 .. image:: https://img.shields.io/pypi/v/trio.svg
    :target: https://pypi.org/project/trio
@@ -21,6 +21,32 @@
 .. image:: https://codecov.io/gh/python-trio/trio/branch/master/graph/badge.svg
    :target: https://codecov.io/gh/python-trio/trio
    :alt: Test coverage
+
+MicroTrio – a port of Trio to MicroPython
+=========================================
+
+This branch contains a version of Trio that runs on MicroPython.
+
+Some of Trio's features won't work and have been stripped:
+
+* µPy doesn't have function decorators.
+
+* µTrio doesn't habdle protection against KeyboardInterrupt.
+
+* ``MultiError`` doesn't try to mangle the error's tracebacks.
+
+* No ``subprocess`` or ``thread`` support.
+
+* No async file support.
+
+* Async networking works, but host name lookup is currently synchronous.
+
+* There are no deprecation warnings.
+
+* Some error messages have been shortened.
+
+* µPy does not have metaclasses, so a few of Trio's protections against
+  abusing its classes had to be removed.
 
 Trio – a friendly Python library for async concurrency and I/O
 ==============================================================
@@ -69,7 +95,7 @@ fun. `Perhaps you'll find the same
 This project is young and still somewhat experimental: the overall
 design is solid and the existing features are fully tested and
 documented, but you may encounter missing functionality or rough
-edges. We *do* encourage you do use it, but you should `read and
+edges. We *do* encourage you to use it, but you should `read and
 subscribe to issue #1
 <https://github.com/python-trio/trio/issues/1>`__ to get warning and a
 chance to give feedback about any compatibility-breaking changes.
@@ -79,16 +105,16 @@ Where to next?
 --------------
 
 **I want to try it out!** Awesome! We have a `friendly tutorial
-<https://trio.readthedocs.io/en/latest/tutorial.html>`__ to get you
+<https://trio.readthedocs.io/en/stable/tutorial.html>`__ to get you
 started; no prior experience with async coding is required.
 
 **Ugh, I don't want to read all that – show me some code!** If you're
 impatient, then here's a `simple concurrency example
-<https://trio.readthedocs.io/en/latest/tutorial.html#tutorial-example-tasks-intro>`__,
+<https://trio.readthedocs.io/en/stable/tutorial.html#tutorial-example-tasks-intro>`__,
 an `echo client
-<https://trio.readthedocs.io/en/latest/tutorial.html#tutorial-echo-client-example>`__,
+<https://trio.readthedocs.io/en/stable/tutorial.html#tutorial-echo-client-example>`__,
 and an `echo server
-<https://trio.readthedocs.io/en/latest/tutorial.html#tutorial-echo-server-example>`__.
+<https://trio.readthedocs.io/en/stable/tutorial.html#tutorial-echo-server-example>`__.
 
 **How does Trio make programs easier to read and reason about than
 competing approaches?** Trio is based on a new way of thinking that we
@@ -125,7 +151,7 @@ usability testing (e.g., maybe try teaching yourself or a friend to
 use Trio and make a list of every error message you hit and place
 where you got confused?), improving the docs, ... check out our `guide
 for contributors
-<https://trio.readthedocs.io/en/latest/contributing.html>`__!
+<https://trio.readthedocs.io/en/stable/contributing.html>`__!
 
 **I don't have any immediate plans to use it, but I love geeking out
 about I/O library design!** That's a little weird? But let's be
@@ -134,7 +160,7 @@ for discussing structured concurrency
 <https://trio.discourse.group/c/structured-concurrency>`__ (developers
 of other systems welcome!). Or check out our `discussion of design
 choices
-<https://trio.readthedocs.io/en/latest/design.html#user-level-api-principles>`__,
+<https://trio.readthedocs.io/en/stable/design.html#user-level-api-principles>`__,
 `reading list
 <https://github.com/python-trio/trio/wiki/Reading-list>`__, and
 `issues tagged design-discussion
@@ -150,5 +176,5 @@ Code of conduct
 ---------------
 
 Contributors are requested to follow our `code of conduct
-<https://trio.readthedocs.io/en/latest/code-of-conduct.html>`__ in all
+<https://trio.readthedocs.io/en/stable/code-of-conduct.html>`__ in all
 project spaces.

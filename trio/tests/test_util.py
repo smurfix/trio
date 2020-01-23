@@ -5,8 +5,8 @@ import sys
 
 import pytest
 
+import trio
 from .. import _core
-from trio import run_sync_in_worker_thread
 from .._util import (
     signal_raise, ConflictDetector, fspath, is_main_thread, generic_function
 )
@@ -37,34 +37,24 @@ async def test_ConflictDetector():
     ul1 = ConflictDetector("ul1")
     ul2 = ConflictDetector("ul2")
 
-    async with ul1:
-        with assert_checkpoints():
-            async with ul2:
-                print("ok")
+    with ul1:
+        with ul2:
+            print("ok")
 
     with pytest.raises(_core.BusyResourceError) as excinfo:
-        async with ul1:
-            with assert_checkpoints():
-                async with ul1:
-                    pass  # pragma: no cover
+        with ul1:
+            with ul1:
+                pass  # pragma: no cover
     assert "ul1" in str(excinfo.value)
 
     async def wait_with_ul1():
-        async with ul1:
+        with ul1:
             await wait_all_tasks_blocked()
 
     with pytest.raises(_core.BusyResourceError) as excinfo:
         async with _core.open_nursery() as nursery:
             nursery.start_soon(wait_with_ul1)
             nursery.start_soon(wait_with_ul1)
-    assert "ul1" in str(excinfo.value)
-
-    # mixing sync and async entry
-    with pytest.raises(_core.BusyResourceError) as excinfo:
-        with ul1.sync:
-            with assert_checkpoints():
-                async with ul1:
-                    pass  # pragma: no cover
     assert "ul1" in str(excinfo.value)
 
 
@@ -81,6 +71,15 @@ def test_module_metadata_is_fixed_up():
     assert trio.hazmat.ParkingLot.__init__.__module__ == "trio.hazmat"
     assert trio.abc.Stream.send_all.__module__ == "trio.abc"
 
+    # And names
+    assert trio.Cancelled.__name__ == "Cancelled"
+    assert trio.Cancelled.__qualname__ == "Cancelled"
+    assert trio.abc.SendStream.send_all.__name__ == "send_all"
+    assert trio.abc.SendStream.send_all.__qualname__ == "SendStream.send_all"
+    assert trio.to_thread.__name__ == "trio.to_thread"
+    assert trio.to_thread.run_sync.__name__ == "run_sync"
+    assert trio.to_thread.run_sync.__qualname__ == "run_sync"
+
 
 # define a concrete class implementing the PathLike protocol
 # Since we want to have compatibility with Python 3.5 we need
@@ -90,7 +89,6 @@ BaseKlass = os.PathLike if hasattr(os, "PathLike") else object
 
 class ConcretePathLike(BaseKlass):
     """ Class implementing the file system path protocol."""
-
     def __init__(self, path=""):
         self.path = path
 
@@ -169,7 +167,7 @@ async def test_is_main_thread():
     def not_main_thread():
         assert not is_main_thread()
 
-    await run_sync_in_worker_thread(not_main_thread)
+    await trio.to_thread.run_sync(not_main_thread)
 
 
 def test_generic_function():

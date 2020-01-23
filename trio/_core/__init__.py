@@ -4,7 +4,6 @@ and deal with private internal data structures. Things in this namespace
 are publicly available in either trio, trio.hazmat, or trio.testing.
 """
 
-
 from ._exceptions import (
     TrioInternalError, RunFinishedError, WouldBlock, Cancelled,
     BusyResourceError, ClosedResourceError, BrokenResourceError, EndOfChannel
@@ -12,8 +11,15 @@ from ._exceptions import (
 
 from ._multierror import MultiError
 
-# TODO:  make the _run namespace a lot less magical
-from ._run import *
+# Imports that always exist
+from ._run import (
+    Task, CancelScope, run, open_nursery, open_cancel_scope, checkpoint,
+    current_task, current_effective_deadline, checkpoint_if_cancelled,
+    TASK_STATUS_IGNORED, current_statistics, current_trio_token, reschedule,
+    remove_instrument, add_instrument, current_clock, current_root_task,
+    spawn_system_task, current_time, wait_all_tasks_blocked, wait_readable,
+    wait_writable, notify_closing, Nursery
+)
 
 # Has to come after _run to resolve a circular import
 from ._traps import (
@@ -28,7 +34,3 @@ from ._parking_lot import ParkingLot
 
 from ._local import RunVar
 
-if hasattr(_run, "wait_readable"):
-    wait_socket_readable = wait_readable
-    wait_socket_writable = wait_writable
-    notify_socket_close = notify_fd_close
