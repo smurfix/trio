@@ -8,7 +8,7 @@ import attr
 from outcome import Error, Value
 
 from .abc import SendChannel, ReceiveChannel, Channel
-from ._util import generic_function, NoPublicConstructor
+from ._util import generic_function
 
 import trio
 
@@ -105,7 +105,7 @@ class MemoryChannelState:
 
 
 @attr.s(eq=False, repr=False)
-class MemorySendChannel(SendChannel, metaclass=NoPublicConstructor):
+class MemorySendChannel(SendChannel):
     _state = attr.ib()
     _closed = attr.ib(default=False)
     # This is just the tasks waiting on *this* object. As compared to
@@ -221,7 +221,7 @@ class MemorySendChannel(SendChannel, metaclass=NoPublicConstructor):
 
 
 @attr.s(eq=False, repr=False)
-class MemoryReceiveChannel(ReceiveChannel, metaclass=NoPublicConstructor):
+class MemoryReceiveChannel(ReceiveChannel):
     _state = attr.ib()
     _closed = attr.ib(default=False)
     _tasks = attr.ib(factory=set)

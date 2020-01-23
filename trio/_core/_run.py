@@ -87,7 +87,6 @@ class SystemClock:
 ################################################################
 
 
-@attr.s(eq=False, slots=True)
 class CancelStatus:
     """Tracks the cancellation status for a contiguous extent
     of code that will become cancelled, or not, as a unit.
@@ -146,9 +145,8 @@ class CancelStatus:
     # the cancellation state of this CancelStatus object. Don't modify
     # this directly; instead, use Task._activate_cancel_status().
     # Invariant: all(task._cancel_status is self for task in self._tasks)
-    _tasks = attr.ib(factory=set, init=False, repr=False)
 
-    abandoned_by_misnesting = attr.ib(default=False, init=False, repr=False)
+    abandoned_by_misnesting = False
 
     def __init__(self, parent, scope):
         self._parent = parent
@@ -285,7 +283,6 @@ https://github.com/python-trio/trio/issues/new
 """
 
 
-@attr.s(eq=False, repr=False, slots=True)
 class CancelScope:
     """A *cancellation scope*: the link between a unit of cancellable
     work and Trio's cancellation system.
@@ -676,7 +673,7 @@ class NurseryManager:
     async def __aenter__(self):
         self._scope = CancelScope()
         self._scope.__enter__()
-        self._nursery = Nursery._create(current_task(), self._scope)
+        self._nursery = Nursery(current_task(), self._scope)
         return self._nursery
 
     async def __aexit__(self, etype, exc, tb):
@@ -713,7 +710,7 @@ def open_nursery():
     return NurseryManager()
 
 
-class Nursery(metaclass=NoPublicConstructor):
+class Nursery:
     """A context which may be used to spawn (or cancel) child tasks.
 
     Not constructed directly, use `open_nursery` instead.
@@ -1038,8 +1035,6 @@ class Task:
 # The central Runner object
 ################################################################
 
-GLOBAL_RUN_CONTEXT = threading.local()
-
 
 @attr.s(frozen=True)
 class _RunStatistics:
@@ -1276,9 +1271,6 @@ class Runner:
                 return await orig_coro
 
             coro = python_wrapper(coro)
-        coro.cr_frame.f_locals.setdefault(
-            LOCALS_KEY_KI_PROTECTION_ENABLED, system_task
-        )
 
         task = Task(
             coro=coro,
@@ -1620,7 +1612,6 @@ def run(
         system_context=system_context,
     )
     GLOBAL_RUN_CONTEXT.runner = runner
-#   locals()[LOCALS_KEY_KI_PROTECTION_ENABLED] = True
 
     try:
         if True: # with ki_manager(runner.deliver_ki, restrict_keyboard_interrupt_to_checkpoints):
@@ -1899,8 +1890,9 @@ async def checkpoint_if_cancelled():
 if os.name == "nt":
     from ._io_windows import WindowsIOManager as TheIOManager
     from ._generated_io_windows import *
- elif not hasattr(select, "select"):
+elif not hasattr(select, "select"):
     from ._io_uselect import USelectIOManager as TheIOManager
+    from ._generated_io_uselect import *
 elif hasattr(select, "epoll"):
     from ._io_epoll import EpollIOManager as TheIOManager
     from ._generated_io_epoll import *

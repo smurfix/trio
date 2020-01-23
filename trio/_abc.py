@@ -606,7 +606,7 @@ class ReceiveChannel(AsyncResource):
             raise StopAsyncIteration
 
 
-class Channel(SendChannel[T], ReceiveChannel[T]):
+class Channel:
     """A standard interface for interacting with bidirectional channels.
 
     A `Channel` is an object that implements both the `SendChannel` and

@@ -3,7 +3,6 @@ import attr
 import outcome
 
 from .. import _core
-from ._run import _public
 
 
 @attr.s(slots=True, eq=False, frozen=True)
@@ -42,7 +41,7 @@ class PollWaiters:
 
 @attr.s(slots=True, cmp=False, hash=False)
 class USelectIOManager:
-    _poll = attr.ib(factory=select.epoll)
+    _poll = attr.ib(factory=uselect.poll)
     # {fd: EpollWaiters}
     _registered = attr.ib(factory=dict)
 

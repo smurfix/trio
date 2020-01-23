@@ -13,7 +13,7 @@ from ._multierror import MultiError
 
 # Imports that always exist
 from ._run import (
-    Task, CancelScope, run, open_nursery, open_cancel_scope, checkpoint,
+    Task, CancelScope, run, open_nursery, checkpoint,
     current_task, current_effective_deadline, checkpoint_if_cancelled,
     TASK_STATUS_IGNORED, current_statistics, current_trio_token, reschedule,
     remove_instrument, add_instrument, current_clock, current_root_task,

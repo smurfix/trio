@@ -46,7 +46,7 @@ class EntryQueue:
     # main thread -- it just might happen at some inconvenient place. But if
     # you look at the one place where the main thread holds the lock, it's
     # just to make 1 assignment, so that's atomic WRT a signal anyway.
-    lock = attr.ib(factory=threading.RLock)
+    lock = attr.ib(factory=RLock)
 
     async def task(self):
         def run_cb(job):

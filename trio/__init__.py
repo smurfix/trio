@@ -57,8 +57,6 @@ from ._highlevel_ssl_helpers import (
 from . import hazmat
 from . import socket
 from . import abc
-from . import from_thread
-from . import to_thread
 # Not imported by default, but mentioned here so static analysis tools like
 # pylint will know that it exists.
 if False:
