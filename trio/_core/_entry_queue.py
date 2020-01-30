@@ -48,6 +48,8 @@ class EntryQueue:
     # just to make 1 assignment, so that's atomic WRT a signal anyway.
     lock = attr.ib(factory=RLock)
 
+    this = None
+
     async def task(self):
         def run_cb(job):
             # Exceptions are
@@ -78,9 +80,11 @@ class EntryQueue:
             while True:
                 run_all_bounded()
                 ## TODO
-                if False: # not self.queue and not self.idempotent_queue:
-                    await self.wakeup.wait_woken()
+                if not self.queue and not self.idempotent_queue:
+                    self.this = _core.current_task()
+                    await _core.wait_task_rescheduled(lambda _: _core.Abort.SUCCEEDED)
                 else:
+                    self.this = None
                     await _core.checkpoint()
         except _core.Cancelled:
             # Keep the work done with this lock held as minimal as possible,
@@ -125,7 +129,8 @@ class EntryQueue:
                 self.idempotent_queue[(sync_fn, args)] = None
             else:
                 self.queue.append((sync_fn, args))
-            # self.wakeup.wakeup_thread_and_signal_safe()
+            if self.this:
+                _core.reschedule(self.this)
 
 
 class TrioToken:
