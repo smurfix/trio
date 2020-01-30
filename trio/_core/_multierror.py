@@ -189,7 +189,8 @@ class MultiError(BaseException):
             # In an earlier version of the code, we didn't define __init__ and
             # simply set the `exceptions` attribute directly on the new object.
             # However, linters expect attributes to be initialized in __init__.
-            return BaseException.__new__(cls, exceptions)
+            cls = object.__new__(cls)
+            return cls
 
     def __str__(self):
         return ", ".join(repr(exc) for exc in self.exceptions)
