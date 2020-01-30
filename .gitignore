@@ -18,7 +18,6 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-/.pybuild/
 /build/
 /develop-eggs/
 /dist/
@@ -26,7 +25,6 @@ __pycache__/
 /lib/
 /lib64/
 /parts/
-/.pybuild/
 /sdist/
 /var/
 *.egg-info/
