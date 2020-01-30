@@ -203,13 +203,25 @@ def test_ki_enabled_out_of_context():
     assert not _core.currently_ki_protected()
 
 
+def test_ki_disabled_in_del():
+    def nestedfunction():
+        return _core.currently_ki_protected()
+
+    def __del__():
+        assert _core.currently_ki_protected()
+        assert nestedfunction()
+
+    __del__()
+    assert not nestedfunction()
+
+
 def test_ki_protection_works():
     async def sleeper(name, record):
         try:
             while True:
                 await _core.checkpoint()
         except _core.Cancelled:
-            record.add((name + " ok"))
+            record.add(name + " ok")
 
     async def raiser(name, record):
         try:
@@ -221,7 +233,7 @@ def test_ki_protection_works():
             print("raised!")
             # Make sure we aren't getting cancelled as well as siginted
             await _core.checkpoint()
-            record.add((name + " raise ok"))
+            record.add(name + " raise ok")
             raise
         else:
             print("didn't raise!")
@@ -232,7 +244,7 @@ def test_ki_protection_works():
                     lambda _: _core.Abort.SUCCEEDED
                 )
             except _core.Cancelled:
-                record.add((name + " cancel ok"))
+                record.add(name + " cancel ok")
 
     # simulated control-C during raiser, which is *unprotected*
     print("check 1")
@@ -468,10 +480,6 @@ def test_ki_with_broken_threads():
 # For details on why this test is non-trivial, see:
 #   https://github.com/python-trio/trio/issues/42
 #   https://github.com/python-trio/trio/issues/109
-# To make it an even better test, we should try doing
-#   pthread_kill(pthread_self, SIGINT)
-# in the child thread, to make sure signals in non-main threads also wake up
-# the main loop... but currently that test would fail (see gh-109 again).
 @slow
 def test_ki_wakes_us_up():
     assert is_main_thread()
@@ -503,10 +511,9 @@ def test_ki_wakes_us_up():
     #
     # PyPy was never affected.
     #
-    # The problem technically occurs on Unix as well, if a signal is delivered
-    # to a non-main thread, and if we were relying on the wakeup fd to wake
-    # us. Currently we don't use the wakeup fd on Unix anyway, though (see
-    # gh-109).
+    # The problem technically can occur on Unix as well, if a signal is
+    # delivered to a non-main thread, though we haven't observed this in
+    # practice.
     #
     # There's also this theoretical problem, but hopefully it won't actually
     # bite us in practice:
@@ -514,8 +521,8 @@ def test_ki_wakes_us_up():
     #   https://bitbucket.org/pypy/pypy/issues/2623
     import platform
     buggy_wakeup_fd = (
-        os.name == "nt" and platform.python_implementation() == "CPython"
-        and sys.version_info < (3, 6, 2)
+        platform.python_implementation() == "CPython" and sys.version_info <
+        (3, 6, 2)
     )
 
     # lock is only needed to avoid an annoying race condition where the

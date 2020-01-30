@@ -4,9 +4,11 @@ from math import inf
 import attr
 from outcome import Error, Value
 
-from . import _core
-from .abc import SendChannel, ReceiveChannel
-from ._util import generic_function
+from .abc import SendChannel, ReceiveChannel, Channel
+from ._util import generic_function, NoPublicConstructor
+
+import trio
+from ._core import enable_ki_protection
 
 
 @generic_function
@@ -18,12 +20,12 @@ def open_memory_channel(max_buffer_size):
     of serialization. They just pass Python objects directly between tasks
     (with a possible stop in an internal buffer along the way).
 
-    Channel objects can be closed by calling
-    :meth:`~trio.abc.AsyncResource.aclose` or using ``async with``. They are
-    *not* automatically closed when garbage collected. Closing memory channels
-    isn't mandatory, but it is generally a good idea, because it helps avoid
-    situations where tasks get stuck waiting on a channel when there's no-one
-    on the other side. See :ref:`channel-shutdown` for details.
+    Channel objects can be closed by calling `~trio.abc.AsyncResource.aclose`
+    or using ``async with``. They are *not* automatically closed when garbage
+    collected. Closing memory channels isn't mandatory, but it is generally a
+    good idea, because it helps avoid situations where tasks get stuck waiting
+    on a channel when there's no-one on the other side. See
+    :ref:`channel-shutdown` for details.
 
     Args:
       max_buffer_size (int or math.inf): The maximum number of items that can
@@ -46,11 +48,11 @@ def open_memory_channel(max_buffer_size):
     * ``max_buffer_size``: The maximum number of items allowed in the buffer,
       as passed to :func:`open_memory_channel`.
     * ``open_send_channels``: The number of open
-      :class:`~trio.abc.SendChannel` endpoints pointing to this channel.
+      :class:`MemorySendChannel` endpoints pointing to this channel.
       Initially 1, but can be increased by
-      :meth:`~trio.abc.SendChannel.clone`.
+      :meth:`MemorySendChannel.clone`.
     * ``open_receive_channels``: Likewise, but for open
-      :class:`~trio.abc.ReceiveChannel` endpoints.
+      :class:`MemoryReceiveChannel` endpoints.
     * ``tasks_waiting_send``: The number of tasks blocked in ``send`` on this
       channel (summing over all clones).
     * ``tasks_waiting_receive``: The number of tasks blocked in ``receive`` on
@@ -62,11 +64,13 @@ def open_memory_channel(max_buffer_size):
     if max_buffer_size < 0:
         raise ValueError("max_buffer_size must be >= 0")
     state = MemoryChannelState(max_buffer_size)
-    return MemorySendChannel(state), MemoryReceiveChannel(state)
+    return (
+        MemorySendChannel._create(state), MemoryReceiveChannel._create(state)
+    )
 
 
-@attr.s(frozen=True)
-class ChannelStats:
+@attr.s(frozen=True, slots=True)
+class MemoryChannelStats:
     current_buffer_used = attr.ib()
     max_buffer_size = attr.ib()
     open_send_channels = attr.ib()
@@ -75,7 +79,7 @@ class ChannelStats:
     tasks_waiting_receive = attr.ib()
 
 
-@attr.s
+@attr.s(slots=True)
 class MemoryChannelState:
     max_buffer_size = attr.ib()
     data = attr.ib(factory=deque)
@@ -88,7 +92,7 @@ class MemoryChannelState:
     receive_tasks = attr.ib(factory=OrderedDict)
 
     def statistics(self):
-        return ChannelStats(
+        return MemoryChannelStats(
             current_buffer_used=len(self.data),
             max_buffer_size=self.max_buffer_size,
             open_send_channels=self.open_send_channels,
@@ -98,8 +102,8 @@ class MemoryChannelState:
         )
 
 
-@attr.s(cmp=False, repr=False)
-class MemorySendChannel(SendChannel):
+@attr.s(eq=False, repr=False)
+class MemorySendChannel(SendChannel, metaclass=NoPublicConstructor):
     _state = attr.ib()
     _closed = attr.ib(default=False)
     # This is just the tasks waiting on *this* object. As compared to
@@ -121,34 +125,43 @@ class MemorySendChannel(SendChannel):
         # XX should we also report statistics specific to this object?
         return self._state.statistics()
 
-    @_core.enable_ki_protection
+    @enable_ki_protection
     def send_nowait(self, value):
+        """Like `~trio.abc.SendChannel.send`, but if the channel's buffer is
+        full, raises `WouldBlock` instead of blocking.
+
+        """
         if self._closed:
-            raise _core.ClosedResourceError
+            raise trio.ClosedResourceError
         if self._state.open_receive_channels == 0:
-            raise _core.BrokenResourceError
+            raise trio.BrokenResourceError
         if self._state.receive_tasks:
             assert not self._state.data
             task, _ = self._state.receive_tasks.popitem(last=False)
             task.custom_sleep_data._tasks.remove(task)
-            _core.reschedule(task, Value(value))
+            trio.hazmat.reschedule(task, Value(value))
         elif len(self._state.data) < self._state.max_buffer_size:
             self._state.data.append(value)
         else:
-            raise _core.WouldBlock
+            raise trio.WouldBlock
 
-    @_core.enable_ki_protection
+    @enable_ki_protection
     async def send(self, value):
-        await _core.checkpoint_if_cancelled()
+        """See `SendChannel.send <trio.abc.SendChannel.send>`.
+
+        Memory channels allow multiple tasks to call `send` at the same time.
+
+        """
+        await trio.hazmat.checkpoint_if_cancelled()
         try:
             self.send_nowait(value)
-        except _core.WouldBlock:
+        except trio.WouldBlock:
             pass
         else:
-            await _core.cancel_shielded_checkpoint()
+            await trio.hazmat.cancel_shielded_checkpoint()
             return
 
-        task = _core.current_task()
+        task = trio.hazmat.current_task()
         self._tasks.add(task)
         self._state.send_tasks[task] = value
         task.custom_sleep_data = self
@@ -156,24 +169,47 @@ class MemorySendChannel(SendChannel):
         def abort_fn(_):
             self._tasks.remove(task)
             del self._state.send_tasks[task]
-            return _core.Abort.SUCCEEDED
+            return trio.hazmat.Abort.SUCCEEDED
 
-        await _core.wait_task_rescheduled(abort_fn)
+        await trio.hazmat.wait_task_rescheduled(abort_fn)
 
-    @_core.enable_ki_protection
+    @enable_ki_protection
     def clone(self):
-        if self._closed:
-            raise _core.ClosedResourceError
-        return MemorySendChannel(self._state)
+        """Clone this send channel object.
 
-    @_core.enable_ki_protection
+        This returns a new `MemorySendChannel` object, which acts as a
+        duplicate of the original: sending on the new object does exactly the
+        same thing as sending on the old object. (If you're familiar with
+        `os.dup`, then this is a similar idea.)
+
+        However, closing one of the objects does not close the other, and
+        receivers don't get `EndOfChannel` until *all* clones have been
+        closed.
+
+        This is useful for communication patterns that involve multiple
+        producers all sending objects to the same destination. If you give
+        each producer its own clone of the `MemorySendChannel`, and then make
+        sure to close each `MemorySendChannel` when it's finished, receivers
+        will automatically get notified when all producers are finished. See
+        :ref:`channel-mpmc` for examples.
+
+        Raises:
+          trio.ClosedResourceError: if you already closed this
+              `MemorySendChannel` object.
+
+        """
+        if self._closed:
+            raise trio.ClosedResourceError
+        return MemorySendChannel._create(self._state)
+
+    @enable_ki_protection
     async def aclose(self):
         if self._closed:
-            await _core.checkpoint()
+            await trio.hazmat.checkpoint()
             return
         self._closed = True
         for task in self._tasks:
-            _core.reschedule(task, Error(_core.ClosedResourceError()))
+            trio.hazmat.reschedule(task, Error(trio.ClosedResourceError()))
             del self._state.send_tasks[task]
         self._tasks.clear()
         self._state.open_send_channels -= 1
@@ -181,13 +217,13 @@ class MemorySendChannel(SendChannel):
             assert not self._state.send_tasks
             for task in self._state.receive_tasks:
                 task.custom_sleep_data._tasks.remove(task)
-                _core.reschedule(task, Error(_core.EndOfChannel()))
+                trio.hazmat.reschedule(task, Error(trio.EndOfChannel()))
             self._state.receive_tasks.clear()
-        await _core.checkpoint()
+        await trio.hazmat.checkpoint()
 
 
-@attr.s(cmp=False, repr=False)
-class MemoryReceiveChannel(ReceiveChannel):
+@attr.s(eq=False, repr=False)
+class MemoryReceiveChannel(ReceiveChannel, metaclass=NoPublicConstructor):
     _state = attr.ib()
     _closed = attr.ib(default=False)
     _tasks = attr.ib(factory=set)
@@ -203,34 +239,45 @@ class MemoryReceiveChannel(ReceiveChannel):
             id(self), id(self._state)
         )
 
-    @_core.enable_ki_protection
+    @enable_ki_protection
     def receive_nowait(self):
+        """Like `~trio.abc.ReceiveChannel.receive`, but if there's nothing
+        ready to receive, raises `WouldBlock` instead of blocking.
+
+        """
         if self._closed:
-            raise _core.ClosedResourceError
+            raise trio.ClosedResourceError
         if self._state.send_tasks:
             task, value = self._state.send_tasks.popitem(last=False)
             task.custom_sleep_data._tasks.remove(task)
-            _core.reschedule(task)
+            trio.hazmat.reschedule(task)
             self._state.data.append(value)
             # Fall through
         if self._state.data:
             return self._state.data.popleft()
         if not self._state.open_send_channels:
-            raise _core.EndOfChannel
-        raise _core.WouldBlock
+            raise trio.EndOfChannel
+        raise trio.WouldBlock
 
-    @_core.enable_ki_protection
+    @enable_ki_protection
     async def receive(self):
-        await _core.checkpoint_if_cancelled()
+        """See `ReceiveChannel.receive <trio.abc.ReceiveChannel.receive>`.
+
+        Memory channels allow multiple tasks to call `receive` at the same
+        time. The first task will get the first item sent, the second task
+        will get the second item sent, and so on.
+
+        """
+        await trio.hazmat.checkpoint_if_cancelled()
         try:
             value = self.receive_nowait()
-        except _core.WouldBlock:
+        except trio.WouldBlock:
             pass
         else:
-            await _core.cancel_shielded_checkpoint()
+            await trio.hazmat.cancel_shielded_checkpoint()
             return value
 
-        task = _core.current_task()
+        task = trio.hazmat.current_task()
         self._tasks.add(task)
         self._state.receive_tasks[task] = None
         task.custom_sleep_data = self
@@ -238,24 +285,50 @@ class MemoryReceiveChannel(ReceiveChannel):
         def abort_fn(_):
             self._tasks.remove(task)
             del self._state.receive_tasks[task]
-            return _core.Abort.SUCCEEDED
+            return trio.hazmat.Abort.SUCCEEDED
 
-        return await _core.wait_task_rescheduled(abort_fn)
+        return await trio.hazmat.wait_task_rescheduled(abort_fn)
 
-    @_core.enable_ki_protection
+    @enable_ki_protection
     def clone(self):
-        if self._closed:
-            raise _core.ClosedResourceError
-        return MemoryReceiveChannel(self._state)
+        """Clone this receive channel object.
 
-    @_core.enable_ki_protection
+        This returns a new `MemoryReceiveChannel` object, which acts as a
+        duplicate of the original: receiving on the new object does exactly
+        the same thing as receiving on the old object.
+
+        However, closing one of the objects does not close the other, and the
+        underlying channel is not closed until all clones are closed. (If
+        you're familiar with `os.dup`, then this is a similar idea.)
+
+        This is useful for communication patterns that involve multiple
+        consumers all receiving objects from the same underlying channel. See
+        :ref:`channel-mpmc` for examples.
+
+        .. warning:: The clones all share the same underlying channel.
+           Whenever a clone :meth:`receive`\\s a value, it is removed from the
+           channel and the other clones do *not* receive that value. If you
+           want to send multiple copies of the same stream of values to
+           multiple destinations, like :func:`itertools.tee`, then you need to
+           find some other solution; this method does *not* do that.
+
+        Raises:
+          trio.ClosedResourceError: if you already closed this
+              `MemoryReceiveChannel` object.
+
+        """
+        if self._closed:
+            raise trio.ClosedResourceError
+        return MemoryReceiveChannel._create(self._state)
+
+    @enable_ki_protection
     async def aclose(self):
         if self._closed:
-            await _core.checkpoint()
+            await trio.hazmat.checkpoint()
             return
         self._closed = True
         for task in self._tasks:
-            _core.reschedule(task, Error(_core.ClosedResourceError()))
+            trio.hazmat.reschedule(task, Error(trio.ClosedResourceError()))
             del self._state.receive_tasks[task]
         self._tasks.clear()
         self._state.open_receive_channels -= 1
@@ -263,7 +336,7 @@ class MemoryReceiveChannel(ReceiveChannel):
             assert not self._state.receive_tasks
             for task in self._state.send_tasks:
                 task.custom_sleep_data._tasks.remove(task)
-                _core.reschedule(task, Error(_core.BrokenResourceError()))
+                trio.hazmat.reschedule(task, Error(trio.BrokenResourceError()))
             self._state.send_tasks.clear()
             self._state.data.clear()
-        await _core.checkpoint()
+        await trio.hazmat.checkpoint()

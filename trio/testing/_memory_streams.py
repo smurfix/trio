@@ -67,17 +67,19 @@ class _UnboundedByteQueue:
             return bytearray()
 
     def get_nowait(self, max_bytes=None):
-        with self._fetch_lock.sync:
+        with self._fetch_lock:
             self._check_max_bytes(max_bytes)
             if not self._closed and not self._data:
                 raise _core.WouldBlock
             return self._get_impl(max_bytes)
 
     async def get(self, max_bytes=None):
-        async with self._fetch_lock:
+        with self._fetch_lock:
             self._check_max_bytes(max_bytes)
             if not self._closed and not self._data:
                 await self._lot.park()
+            else:
+                await _core.checkpoint()
             return self._get_impl(max_bytes)
 
 
@@ -101,7 +103,6 @@ class MemorySendStream(SendStream):
        you can change them at any time.
 
     """
-
     def __init__(
         self,
         send_all_hook=None,
@@ -121,10 +122,10 @@ class MemorySendStream(SendStream):
         calls the :attr:`send_all_hook` (if any).
 
         """
-        # The lock itself is a checkpoint, but then we also yield inside the
-        # lock to give ourselves a chance to detect buggy user code that calls
-        # this twice at the same time.
-        async with self._conflict_detector:
+        # Execute two checkpoints so we have more of a chance to detect
+        # buggy user code that calls this twice at the same time.
+        with self._conflict_detector:
+            await _core.checkpoint()
             await _core.checkpoint()
             self._outgoing.put(data)
             if self.send_all_hook is not None:
@@ -135,10 +136,10 @@ class MemorySendStream(SendStream):
         then returns immediately.
 
         """
-        # The lock itself is a checkpoint, but then we also yield inside the
-        # lock to give ourselves a chance to detect buggy user code that calls
-        # this twice at the same time.
-        async with self._conflict_detector:
+        # Execute two checkpoints so we have more of a chance to detect
+        # buggy user code that calls this twice at the same time.
+        with self._conflict_detector:
+            await _core.checkpoint()
             await _core.checkpoint()
             # check for being closed:
             self._outgoing.put(b"")
@@ -213,7 +214,6 @@ class MemoryReceiveStream(ReceiveStream):
        change them at any time.
 
     """
-
     def __init__(self, receive_some_hook=None, close_hook=None):
         self._conflict_detector = _util.ConflictDetector(
             "another task is using this stream"
@@ -223,18 +223,16 @@ class MemoryReceiveStream(ReceiveStream):
         self.receive_some_hook = receive_some_hook
         self.close_hook = close_hook
 
-    async def receive_some(self, max_bytes):
+    async def receive_some(self, max_bytes=None):
         """Calls the :attr:`receive_some_hook` (if any), and then retrieves
         data from the internal buffer, blocking if necessary.
 
         """
-        # The lock itself is a checkpoint, but then we also yield inside the
-        # lock to give ourselves a chance to detect buggy user code that calls
-        # this twice at the same time.
-        async with self._conflict_detector:
+        # Execute two checkpoints so we have more of a chance to detect
+        # buggy user code that calls this twice at the same time.
+        with self._conflict_detector:
             await _core.checkpoint()
-            if max_bytes is None:
-                raise TypeError("max_bytes must not be None")
+            await _core.checkpoint()
             if self._closed:
                 raise _core.ClosedResourceError
             if self.receive_some_hook is not None:
@@ -318,7 +316,7 @@ def memory_stream_one_way_pair():
     buffering and flexible configuration options.
 
     You can think of this as being a no-operating-system-involved
-    trio-streamsified version of :func:`os.pipe` (except that :func:`os.pipe`
+    Trio-streamsified version of :func:`os.pipe` (except that :func:`os.pipe`
     returns the streams in the wrong order – we follow the superior convention
     that data flows from left to right).
 
@@ -368,7 +366,7 @@ def memory_stream_pair():
     :class:`~trio.StapledStream` to combine them into a single bidirectional
     stream.
 
-    This is like a no-operating-system-involved, trio-streamsified version of
+    This is like a no-operating-system-involved, Trio-streamsified version of
     :func:`socket.socketpair`.
 
     Returns:
@@ -380,9 +378,9 @@ def memory_stream_pair():
 
        left, right = memory_stream_pair()
        await left.send_all(b"123")
-       assert await right.receive_some(10) == b"123"
+       assert await right.receive_some() == b"123"
        await right.send_all(b"456")
-       assert await left.receive_some(10) == b"456"
+       assert await left.receive_some() == b"456"
 
     But if you read the docs for :class:`~trio.StapledStream` and
     :func:`memory_stream_one_way_pair`, you'll see that all the pieces
@@ -409,10 +407,7 @@ def memory_stream_pair():
             await left.send_eof()
 
         async def receiver():
-            while True:
-                data = await right.receive_some(10)
-                if data == b"":
-                    return
+            async for data in right:
                 print(data)
 
         async with trio.open_nursery() as nursery:
@@ -470,6 +465,7 @@ class _LockstepByteQueue:
             if self._sender_closed or self._receiver_closed:
                 break
             await self._waiters.park()
+        await _core.checkpoint()
 
     def close_sender(self):
         self._sender_closed = True
@@ -480,7 +476,7 @@ class _LockstepByteQueue:
         self._something_happened()
 
     async def send_all(self, data):
-        async with self._send_conflict_detector:
+        with self._send_conflict_detector:
             if self._sender_closed:
                 raise _core.ClosedResourceError
             if self._receiver_closed:
@@ -495,21 +491,23 @@ class _LockstepByteQueue:
                 raise _core.BrokenResourceError
 
     async def wait_send_all_might_not_block(self):
-        async with self._send_conflict_detector:
+        with self._send_conflict_detector:
             if self._sender_closed:
                 raise _core.ClosedResourceError
             if self._receiver_closed:
+                await _core.checkpoint()
                 return
             await self._wait_for(lambda: self._receiver_waiting)
             if self._sender_closed:
                 raise _core.ClosedResourceError
 
-    async def receive_some(self, max_bytes):
-        async with self._receive_conflict_detector:
+    async def receive_some(self, max_bytes=None):
+        with self._receive_conflict_detector:
             # Argument validation
-            max_bytes = operator.index(max_bytes)
-            if max_bytes < 1:
-                raise ValueError("max_bytes must be >= 1")
+            if max_bytes is not None:
+                max_bytes = operator.index(max_bytes)
+                if max_bytes < 1:
+                    raise ValueError("max_bytes must be >= 1")
             # State validation
             if self._receiver_closed:
                 raise _core.ClosedResourceError
@@ -524,6 +522,8 @@ class _LockstepByteQueue:
                 raise _core.ClosedResourceError
             # Get data, possibly waking send_all
             if self._data:
+                # Neat trick: if max_bytes is None, then obj[:max_bytes] is
+                # the same as obj[:].
                 got = self._data[:max_bytes]
                 del self._data[:max_bytes]
                 self._something_happened()
@@ -562,7 +562,7 @@ class _LockstepReceiveStream(ReceiveStream):
         self.close()
         await _core.checkpoint()
 
-    async def receive_some(self, max_bytes):
+    async def receive_some(self, max_bytes=None):
         return await self._lbq.receive_some(max_bytes)
 
 

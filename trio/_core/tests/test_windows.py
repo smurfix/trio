@@ -165,7 +165,7 @@ async def test_too_late_to_cancel():
                 write_fp.write(b"test1\ntest2\n")
 
             # Note: not trio.sleep! We're making sure the OS level
-            # ReadFile completes, before trio has a chance to execute
+            # ReadFile completes, before Trio has a chance to execute
             # another checkpoint and notice it completed.
             time.sleep(1)
             nursery.cancel_scope.cancel()
@@ -175,9 +175,3 @@ async def test_too_late_to_cancel():
         # fallback completion that was posted when CancelIoEx failed.
         assert await _core.readinto_overlapped(read_handle, target) == 6
         assert target[:6] == b"test2\n"
-
-
-# XX: test setting the iomanager._iocp to something weird to make
-# sure that the IOCP thread can send exceptions back to the main thread.
-# --> it's not clear if this is actually possible? we just get
-# ERROR_INVALID_HANDLE which looks like the IOCP was closed (not an error)

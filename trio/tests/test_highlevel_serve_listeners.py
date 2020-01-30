@@ -2,7 +2,6 @@ import pytest
 
 from functools import partial
 import errno
-from collections import deque
 
 import attr
 
@@ -10,7 +9,7 @@ import trio
 from trio.testing import memory_stream_pair, wait_all_tasks_blocked
 
 
-@attr.s(hash=False, cmp=False)
+@attr.s(hash=False, eq=False)
 class MemoryListener(trio.abc.Listener):
     closed = attr.ib(default=False)
     accepted_streams = attr.ib(factory=list)
@@ -45,7 +44,7 @@ async def test_serve_listeners_basic():
     def close_hook():
         # Make sure this is a forceful close
         assert trio.current_effective_deadline() == float("-inf")
-        record.append(("closed"))
+        record.append("closed")
 
     async def handler(stream):
         await stream.send_all(b"123")

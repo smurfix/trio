@@ -75,6 +75,15 @@ async def test_div_magic(cls_a, cls_b):
     assert str(result) == os.path.join('a', 'b')
 
 
+@pytest.mark.parametrize(
+    'cls_a,cls_b', [(trio.Path, pathlib.Path), (trio.Path, trio.Path)]
+)
+@pytest.mark.parametrize('path', ["foo", "foo/bar/baz", "./foo"])
+async def test_hash_magic(cls_a, cls_b, path):
+    a, b = cls_a(path), cls_b(path)
+    assert hash(a) == hash(b)
+
+
 async def test_forwarded_properties(path):
     # use `name` as a representative of forwarded properties
 
@@ -197,6 +206,35 @@ async def test_open_file_can_open_path(path):
         assert f.name == fspath(path)
 
 
+async def test_globmethods(path):
+    # Populate a directory tree
+    await path.mkdir()
+    await (path / 'foo').mkdir()
+    await (path / 'foo' / '_bar.txt').write_bytes(b'')
+    await (path / 'bar.txt').write_bytes(b'')
+    await (path / 'bar.dat').write_bytes(b'')
+
+    # Path.glob
+    for _pattern, _results in {
+        '*.txt': {'bar.txt'},
+        '**/*.txt': {'_bar.txt', 'bar.txt'},
+    }.items():
+        entries = set()
+        for entry in await path.glob(_pattern):
+            assert isinstance(entry, trio.Path)
+            entries.add(entry.name)
+
+        assert entries == _results
+
+    # Path.rglob
+    entries = set()
+    for entry in await path.rglob('*.txt'):
+        assert isinstance(entry, trio.Path)
+        entries.add(entry.name)
+
+    assert entries == {'_bar.txt', 'bar.txt'}
+
+
 async def test_iterdir(path):
     # Populate a directory
     await path.mkdir()
@@ -209,3 +247,14 @@ async def test_iterdir(path):
         entries.add(entry.name)
 
     assert entries == {'bar.txt', 'foo'}
+
+
+async def test_classmethods():
+    assert isinstance(await trio.Path.home(), trio.Path)
+
+    # pathlib.Path has only two classmethods
+    assert str(await trio.Path.home()) == os.path.expanduser('~')
+    assert str(await trio.Path.cwd()) == os.getcwd()
+
+    # Wrapped method has docstring
+    assert trio.Path.home.__doc__

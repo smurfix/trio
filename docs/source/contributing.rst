@@ -167,6 +167,14 @@ to get feedback on, feel free to submit it as a PR. (In this case it's
 traditional to start the PR title with ``[WIP]``, for "work in
 progress".)
 
+When you are submitting your PR, you can include ``Closes #123``,
+``Fixes: #123`` or
+`some variation <https://help.github.com/en/articles/closing-issues-using-keywords>`__
+in either your commit message or the PR description, in order to
+automatically close the referenced issue when the PR is merged.
+This keeps us closer to the desired state where each open issue reflects some
+work that still needs to be done.
+
 
 .. _pull-request-tests:
 
@@ -176,10 +184,11 @@ Tests
 We use `pytest <https://pytest.org/>`__ for testing. To run the tests
 locally, you should run:
 
-* ``cd path/to/project/checkout/``
-* ``pip install -r test-requirements.txt`` (possibly using a
-  virtualenv)
-* ``pytest <projectname>``
+.. code-block:: shell
+
+   cd path/to/trio/checkout/
+   pip install -r test-requirements.txt  # possibly using a virtualenv
+   pytest trio
 
 This doesn't try to be completely exhaustive – it only checks that
 things work on your machine, and it may skip some slow tests. But it's
@@ -309,7 +318,8 @@ Release notes
 ~~~~~~~~~~~~~
 
 We use `towncrier <https://github.com/hawkowl/towncrier>`__ to manage
-our release notes. Basically, every pull request that has a user
+our `release notes <https://trio.readthedocs.io/en/latest/history.html>`__.
+Basically, every pull request that has a user
 visible effect should add a short file to the ``newsfragments/``
 directory describing the change, with a name like ``<ISSUE
 NUMBER>.<TYPE>.rst``. See `newsfragments/README.rst
@@ -368,6 +378,19 @@ a dangling reference, you can add it to the `nitpick_ignore
 <http://www.sphinx-doc.org/en/stable/config.html#confval-nitpick_ignore>`__
 whitelist in ``docs/source/conf.py``.
 
+To build the docs locally, use our handy ``docs-requirements.txt``
+file to install all of the required packages (possibly using a
+virtualenv). After that, build the docs using ``make html`` in the
+docs directory. The whole process might look something like this::
+
+    cd path/to/project/checkout/
+    pip install -r docs-requirements.txt
+    cd docs
+    make html
+
+You can then browse the docs using Python's builtin http server:
+``python -m http.server 8000 --bind 127.0.0.1 --directory build/html``
+and then opening ``http://127.0.0.1:8000/`` in your web browser.
 
 .. _joining-the-team:
 

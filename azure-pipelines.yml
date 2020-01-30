@@ -34,17 +34,29 @@ jobs:
     - bash: |
         set -ex
         env | sort
-        sudo docker run -e SYSTEM_JOBIDENTIFIER="$SYSTEM_JOBIDENTIFIER" -e CODECOV_TOKEN="$CODECOV_TOKEN" -v "$PWD:/t" ubuntu:rolling /bin/bash -c "set -ex; cd /t; apt update; apt install -y python3.7-dev python3-virtualenv git build-essential curl; python3.7 -m virtualenv -p python3.7 venv; source venv/bin/activate; source ci/ci.sh"
+        sudo docker run -e SYSTEM_JOBIDENTIFIER="$SYSTEM_JOBIDENTIFIER" -e CODECOV_TOKEN="$CODECOV_TOKEN" -v "$PWD:/t" ubuntu:rolling /bin/bash -c "set -ex; cd /t; apt update; apt install -y python3.7-dev python3-virtualenv git build-essential curl; python3.7 -m virtualenv -p python3.7 venv; source venv/bin/activate; source ci.sh"
 
 - job: 'Windows'
   pool:
     vmImage: 'vs2017-win2016'
-  timeoutInMinutes: 10
+  timeoutInMinutes: 20
   strategy:
     # Python version list:
     #   64-bit: https://www.nuget.org/packages/python/
     #   32-bit: https://www.nuget.org/packages/pythonx86/
     matrix:
+      # The LSP tests can be super slow for some reason - like
+      # sometimes it just randomly takes 5 minutes to run the LSP
+      # installer. So we put them at the top, so they can get started
+      # earlier.
+      "with IFS LSP, Python 3.7, 64 bit":
+        python.version: '3.7.2'
+        python.pkg: 'python'
+        lsp: 'http://www.proxifier.com/download/ProxifierSetup.exe'
+      "with non-IFS LSP, Python 3.7, 64 bit":
+        python.version: '3.7.2'
+        python.pkg: 'python'
+        lsp: 'http://download.pctools.com/mirror/updates/9.0.0.2308-SDavfree-lite_en.exe'
       "Python 3.5, 32 bit":
         python.version: '3.5.4'
         python.pkg: 'pythonx86'
@@ -67,7 +79,7 @@ jobs:
   steps:
   - task: NuGetToolInstaller@0
 
-  - bash: ci/ci.sh
+  - bash: ./ci.sh
     displayName: "Run the actual tests"
 
   - task: PublishTestResults@2
@@ -97,7 +109,7 @@ jobs:
 #     inputs:
 #       versionSpec: '$(python.version)'
 #
-#   - bash: ci/ci.sh
+#   - bash: ci.sh
 #     displayName: "Run the actual tests"
 #
 #   - task: PublishTestResults@2
@@ -123,7 +135,7 @@ jobs:
     inputs:
       versionSpec: '$(python.version)'
 
-  - bash: ci/ci.sh
+  - bash: ./ci.sh
     displayName: "Run the actual tests"
 
   - task: PublishTestResults@2

@@ -40,7 +40,7 @@ class MockClock(Clock):
        Basically the idea is that if you have code or tests that use sleeps
        and timeouts, you can use this to make it run much faster, totally
        automatically. (At least, as long as those sleeps/timeouts are
-       happening inside trio; if your test involves talking to external
+       happening inside Trio; if your test involves talking to external
        service and waiting for it to timeout then obviously we can't help you
        there.)
 
@@ -80,7 +80,6 @@ class MockClock(Clock):
           :func:`wait_all_tasks_blocked`.
 
     """
-
     def __init__(self, rate=0.0, autojump_threshold=inf):
         # when the real clock said 'real_base', the virtual time was
         # 'virtual_base', and since then it's advanced at 'rate' virtual
@@ -148,7 +147,7 @@ class MockClock(Clock):
                     )
                     statistics = _core.current_statistics()
                     jump = statistics.seconds_to_next_deadline
-                    if jump < inf:
+                    if 0 < jump < inf:
                         self.jump(jump)
                     else:
                         # There are no deadlines, nothing is going to happen

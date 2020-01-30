@@ -1,4 +1,3 @@
-from collections import deque
 import attr
 
 from .. import _core
@@ -43,7 +42,6 @@ class UnboundedQueue:
            ...
 
     """
-
     @deprecated(
         "0.9.0",
         issue=497,
