@@ -1265,13 +1265,6 @@ class Runner:
         else:
             context = copy_context()
 
-        if not hasattr(coro, "cr_frame"):
-            # This async function is implemented in C or Cython
-            async def python_wrapper(orig_coro):
-                return await orig_coro
-
-            coro = python_wrapper(coro)
-
         task = Task(
             coro=coro,
             parent_nursery=nursery,
