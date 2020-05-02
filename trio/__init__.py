@@ -18,9 +18,8 @@ from ._version import __version__
 from ._core import (
     TrioInternalError, RunFinishedError, WouldBlock, Cancelled,
     BusyResourceError, ClosedResourceError, MultiError, run, open_nursery,
-    CancelScope, open_cancel_scope, current_effective_deadline,
-    TASK_STATUS_IGNORED, current_time, BrokenResourceError, EndOfChannel,
-    Nursery
+    CancelScope, current_effective_deadline, TASK_STATUS_IGNORED, current_time,
+    BrokenResourceError, EndOfChannel, Nursery
 )
 
 from ._timeouts import (
@@ -170,3 +169,10 @@ fixup_module_metadata(
     __name__ + ".subprocess", _deprecated_subprocess_reexports.__dict__
 )
 del fixup_module_metadata
+
+import sys
+if sys.version_info < (3, 6):
+    _deprecate.warn_deprecated(
+        "Support for Python 3.5", "0.14", issue=75, instead="Python 3.6+"
+    )
+del sys

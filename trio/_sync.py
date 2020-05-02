@@ -676,6 +676,8 @@ class StrictFIFOLock(Lock):
     on this property.
 
     """
+
+
 @attr.s(frozen=True)
 class _ConditionStatistics:
     tasks_waiting = attr.ib()
@@ -737,7 +739,7 @@ class Condition:
 
     @enable_ki_protection
     async def wait(self):
-        """Wait for another thread to call :meth:`notify` or
+        """Wait for another task to call :meth:`notify` or
         :meth:`notify_all`.
 
         When calling this method, you must hold the lock. It releases the lock

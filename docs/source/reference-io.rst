@@ -24,7 +24,7 @@ create complex transport configurations. Here's some examples:
   speak SSL over the network is to wrap an
   :class:`~trio.SSLStream` around a :class:`~trio.SocketStream`.
 
-* If you spawn a :ref:`subprocess`, you can get a
+* If you spawn a :ref:`subprocess <subprocess>`, you can get a
   :class:`~trio.abc.SendStream` that lets you write to its stdin, and
   a :class:`~trio.abc.ReceiveStream` that lets you read from its
   stdout. If for some reason you wanted to speak SSL to a subprocess,
@@ -479,7 +479,7 @@ you can `jump down to the API overview
 Background: Why is async file I/O useful? The answer may surprise you
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Many people expect that switching to from synchronous file I/O to
+Many people expect that switching from synchronous file I/O to
 async file I/O will always make their program faster. This is not
 true! If we just look at total throughput, then async file I/O might
 be faster, slower, or about the same, and it depends in a complicated

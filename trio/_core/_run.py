@@ -619,12 +619,6 @@ class CancelScope(metaclass=Final):
         return self._cancel_called
 
 
-@deprecated("0.11.0", issue=607, instead="trio.CancelScope")
-def open_cancel_scope(*, deadline=inf, shield=False):
-    """Returns a context manager which creates a new cancellation scope."""
-    return CancelScope(deadline=deadline, shield=shield)
-
-
 ################################################################
 # Nursery and friends
 ################################################################
@@ -856,7 +850,7 @@ class Nursery(metaclass=NoPublicConstructor):
             return MultiError(self._pending_excs)
 
     def start_soon(self, async_fn, *args, name=None):
-        """ Creates a child task, scheduling ``await async_fn(*args)``.
+        """Creates a child task, scheduling ``await async_fn(*args)``.
 
         This and :meth:`start` are the two fundamental methods for
         creating concurrent tasks in Trio.
@@ -1581,21 +1575,21 @@ class Runner:
                  lock = trio.Lock()
                  await lock.acquire()
                  async with trio.open_nursery() as nursery:
-                     child = nursery.start_soon(lock_taker, lock)
+                     nursery.start_soon(lock_taker, lock)
                      # child hasn't run yet, we have the lock
                      assert lock.locked()
-                     assert lock._owner is trio.current_task()
+                     assert lock._owner is trio.hazmat.current_task()
                      await trio.testing.wait_all_tasks_blocked()
                      # now the child has run and is blocked on lock.acquire(), we
                      # still have the lock
                      assert lock.locked()
-                     assert lock._owner is trio.current_task()
+                     assert lock._owner is trio.hazmat.current_task()
                      lock.release()
                      try:
                          # The child has a prior claim, so we can't have it
                          lock.acquire_nowait()
                      except trio.WouldBlock:
-                         assert lock._owner is child
+                         assert lock._owner is not trio.hazmat.current_task()
                          print("PASS")
                      else:
                          print("FAIL")
