@@ -1306,7 +1306,7 @@ produces *backpressure*: if the channel producers are running faster
 than the consumers, then it forces the producers to slow down.
 
 You can disable buffering entirely, by doing
-``open_memory_channel(0)``. In that case any task calls
+``open_memory_channel(0)``. In that case any task that calls
 :meth:`~trio.abc.SendChannel.send` will wait until another task calls
 :meth:`~trio.abc.ReceiveChannel.receive`, and vice versa. This is similar to
 how channels work in the `classic Communicating Sequential Processes
@@ -1433,9 +1433,9 @@ than the lower-level primitives discussed in this section. But if you
 need them, they're here. (If you find yourself reaching for these
 because you're trying to implement a new higher-level synchronization
 primitive, then you might also want to check out the facilities in
-:mod:`trio.hazmat` for a more direct exposure of Trio's underlying
+:mod:`trio.lowlevel` for a more direct exposure of Trio's underlying
 synchronization logic. All of classes discussed in this section are
-implemented on top of the public APIs in :mod:`trio.hazmat`; they
+implemented on top of the public APIs in :mod:`trio.lowlevel`; they
 don't have any special access to Trio's internals.)
 
 .. autoclass:: CapacityLimiter
@@ -1444,8 +1444,14 @@ don't have any special access to Trio's internals.)
 .. autoclass:: Semaphore
    :members:
 
+.. We have to use :inherited-members: here because all the actual lock
+   methods are stashed in _LockImpl. Weird side-effect of having both
+   Lock and StrictFIFOLock, but wanting both to be marked Final so
+   neither can inherit from the other.
+
 .. autoclass:: Lock
    :members:
+   :inherited-members:
 
 .. autoclass:: StrictFIFOLock
    :members:

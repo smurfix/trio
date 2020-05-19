@@ -4,12 +4,13 @@ import subprocess
 import sys
 import pytest
 import random
+from functools import partial
 
 from .. import (
     _core, move_on_after, fail_after, sleep, sleep_forever, Process,
     open_process, run_process, TrioDeprecationWarning
 )
-from .._core.tests.tutil import slow
+from .._core.tests.tutil import slow, skip_if_fbsd_pipes_broken
 from ..testing import wait_all_tasks_blocked
 
 posix = os.name == "posix"
@@ -47,6 +48,7 @@ async def test_basic():
         assert repr(proc) == repr_template.format(
             "running with PID {}".format(proc.pid)
         )
+    assert proc._pidfd is None
     assert proc.returncode == 0
     assert repr(proc) == repr_template.format("exited with status 0")
 
@@ -58,12 +60,14 @@ async def test_basic():
     )
 
 
-# Delete this test when we remove direct Process construction
-async def test_deprecated_Process_init():
-    with pytest.warns(TrioDeprecationWarning):
-        async with Process(EXIT_TRUE) as proc:
-            assert isinstance(proc, Process)
-        assert proc.returncode == 0
+async def test_auto_update_returncode():
+    p = await open_process(SLEEP(9999))
+    assert p.returncode is None
+    p.kill()
+    p._proc.wait()
+    assert p.returncode is not None
+    assert p._pidfd is None
+    assert p.returncode is not None
 
 
 async def test_multi_wait():
@@ -262,6 +266,7 @@ async def test_run_check():
     assert result.returncode == 1
 
 
+@skip_if_fbsd_pipes_broken
 async def test_run_with_broken_pipe():
     result = await run_process(
         [sys.executable, "-c", "import sys; sys.stdin.close()"],
@@ -421,3 +426,56 @@ def test_waitid_eintr():
             sleeper.kill()
             sleeper.wait()
         signal.signal(signal.SIGALRM, old_sigalrm)
+
+
+async def test_custom_deliver_cancel():
+    custom_deliver_cancel_called = False
+
+    async def custom_deliver_cancel(proc):
+        nonlocal custom_deliver_cancel_called
+        custom_deliver_cancel_called = True
+        proc.terminate()
+        # Make sure this does get cancelled when the process exits, and that
+        # the process really exited.
+        try:
+            await sleep_forever()
+        finally:
+            assert proc.returncode is not None
+
+    async with _core.open_nursery() as nursery:
+        nursery.start_soon(
+            partial(
+                run_process, SLEEP(9999), deliver_cancel=custom_deliver_cancel
+            )
+        )
+        await wait_all_tasks_blocked()
+        nursery.cancel_scope.cancel()
+
+    assert custom_deliver_cancel_called
+
+
+async def test_warn_on_failed_cancel_terminate(monkeypatch):
+    original_terminate = Process.terminate
+
+    def broken_terminate(self):
+        original_terminate(self)
+        raise OSError("whoops")
+
+    monkeypatch.setattr(Process, "terminate", broken_terminate)
+
+    with pytest.warns(RuntimeWarning, match=".*whoops.*"):
+        async with _core.open_nursery() as nursery:
+            nursery.start_soon(run_process, SLEEP(9999))
+            await wait_all_tasks_blocked()
+            nursery.cancel_scope.cancel()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="posix only")
+async def test_warn_on_cancel_SIGKILL_escalation(autojump_clock, monkeypatch):
+    monkeypatch.setattr(Process, "terminate", lambda *args: None)
+
+    with pytest.warns(RuntimeWarning, match=".*ignored SIGTERM.*"):
+        async with _core.open_nursery() as nursery:
+            nursery.start_soon(run_process, SLEEP(9999))
+            await wait_all_tasks_blocked()
+            nursery.cancel_scope.cancel()

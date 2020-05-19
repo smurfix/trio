@@ -14,13 +14,11 @@ import attr
 import outcome
 import sniffio
 import pytest
-from async_generator import async_generator
 
 from .tutil import slow, check_sequence_matches, gc_collect_harder
 from ... import _core
 from ..._threads import to_thread_run_sync
 from ..._timeouts import sleep, fail_after
-from ..._util import aiter_compat
 from ...testing import (
     wait_all_tasks_blocked,
     Sequencer,
@@ -38,9 +36,7 @@ async def sleep_forever():
 # Some of our tests need to leak coroutines, and thus trigger the
 # "RuntimeWarning: coroutine '...' was never awaited" message. This context
 # manager should be used anywhere this happens to hide those messages, because
-# (a) when expected they're clutter, (b) on CPython 3.5.x where x < 3, this
-# warning can trigger a segfault if we run with warnings turned into errors:
-#   https://bugs.python.org/issue27811
+# when expected they're clutter.
 @contextmanager
 def ignore_coroutine_never_awaited_warnings():
     with warnings.catch_warnings():
@@ -1380,13 +1376,7 @@ async def test_TrioToken_run_sync_soon_idempotent():
         for i in range(100):
             token.run_sync_soon(cb, i, idempotent=True)
     await wait_all_tasks_blocked()
-    if (
-        sys.version_info < (3, 6)
-        and platform.python_implementation() == "CPython"
-    ):
-        # no order guarantees
-        record.sort()
-    # Otherwise, we guarantee FIFO
+    # We guarantee FIFO
     assert record == list(range(100))
 
 
@@ -1762,9 +1752,8 @@ def test_nice_error_on_bad_calls_to_run_or_spawn():
                 bad_call(len, [1, 2, 3])
             assert "appears to be synchronous" in str(excinfo.value)
 
-            @async_generator
             async def async_gen(arg):  # pragma: no cover
-                pass
+                yield
 
             with pytest.raises(TypeError) as excinfo:
                 bad_call(async_gen, 0)
@@ -2049,7 +2038,6 @@ async def test_nursery_stop_async_iteration():
         async def _accumulate(self, f, items, i):
             items[i] = await f()
 
-        @aiter_compat
         def __aiter__(self):
             return self
 
@@ -2167,11 +2155,7 @@ def test_system_task_contexts():
 
 
 def test_Nursery_init():
-    check_Nursery_error = pytest.raises(
-        TypeError, match='no public constructor available'
-    )
-
-    with check_Nursery_error:
+    with pytest.raises(TypeError):
         _core._run.Nursery(None, None)
 
 
@@ -2182,23 +2166,17 @@ async def test_Nursery_private_init():
 
 
 def test_Nursery_subclass():
-    with pytest.raises(
-        TypeError, match='`Nursery` does not support subclassing'
-    ):
+    with pytest.raises(TypeError):
 
         class Subclass(_core._run.Nursery):
             pass
 
 
 def test_Cancelled_init():
-    check_Cancelled_error = pytest.raises(
-        TypeError, match='no public constructor available'
-    )
-
-    with check_Cancelled_error:
+    with pytest.raises(TypeError):
         raise _core.Cancelled
 
-    with check_Cancelled_error:
+    with pytest.raises(TypeError):
         _core.Cancelled()
 
     # private constructor should not raise
@@ -2211,18 +2189,14 @@ def test_Cancelled_str():
 
 
 def test_Cancelled_subclass():
-    with pytest.raises(
-        TypeError, match='`Cancelled` does not support subclassing'
-    ):
+    with pytest.raises(TypeError):
 
         class Subclass(_core.Cancelled):
             pass
 
 
 def test_CancelScope_subclass():
-    with pytest.raises(
-        TypeError, match='`CancelScope` does not support subclassing'
-    ):
+    with pytest.raises(TypeError):
 
         class Subclass(_core.CancelScope):
             pass
@@ -2389,23 +2363,10 @@ def test_async_function_implemented_in_C():
     # These used to crash because we'd try to mutate the coroutine object's
     # cr_frame, but C functions don't have Python frames.
 
-    ns = {"_core": _core}
-    try:
-        exec(
-            dedent(
-                """
-                async def agen_fn(record):
-                    assert not _core.currently_ki_protected()
-                    record.append("the generator ran")
-                    yield
-                """
-            ),
-            ns,
-        )
-    except SyntaxError:
-        pytest.skip("Requires Python 3.6+")
-    else:
-        agen_fn = ns["agen_fn"]
+    async def agen_fn(record):
+        assert not _core.currently_ki_protected()
+        record.append("the generator ran")
+        yield
 
     run_record = []
     agen = agen_fn(run_record)

@@ -1,3 +1,4 @@
+import os
 from contextlib import contextmanager
 
 import trio
@@ -8,8 +9,6 @@ try:
     has_unix = True
 except ImportError:
     has_unix = False
-
-__all__ = ["open_unix_socket"]
 
 
 @contextmanager
@@ -44,6 +43,6 @@ async def open_unix_socket(filename,):
     # possible location to connect to
     sock = socket(AF_UNIX, SOCK_STREAM)
     with close_on_error(sock):
-        await sock.connect(trio._util.fspath(filename))
+        await sock.connect(os.fspath(filename))
 
     return trio.SocketStream(sock)

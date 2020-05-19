@@ -24,6 +24,18 @@ sys.path.insert(0, os.path.abspath('.'))
 # For trio itself
 sys.path.insert(0, os.path.abspath('../..'))
 
+# https://docs.readthedocs.io/en/stable/builds.html#build-environment
+if "READTHEDOCS" in os.environ:
+    import glob
+    if glob.glob("../../newsfragments/*.*.rst"):
+        print("-- Found newsfragments; running towncrier --", flush=True)
+        import subprocess
+        subprocess.run(
+            ["towncrier", "--yes", "--date", "not released yet"],
+            cwd="../..",
+            check=True,
+        )
+
 # Warn about all references to unknown targets
 nitpicky = True
 # Except for these ones, which we expect to point to unknown targets:
@@ -32,11 +44,12 @@ nitpick_ignore = [
     ("py:class", "bytes-like"),
     ("py:class", "None"),
     # Was removed but still shows up in changelog
-    ("py:class", "trio.hazmat.RunLocal"),
+    ("py:class", "trio.lowlevel.RunLocal"),
     # trio.abc is documented at random places scattered throughout the docs
     ("py:mod", "trio.abc"),
     ("py:class", "math.inf"),
     ("py:exc", "Anything else"),
+    ("py:class", "async function"),
 ]
 autodoc_inherit_docstrings = False
 default_role = "obj"

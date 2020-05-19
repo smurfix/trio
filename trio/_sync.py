@@ -5,22 +5,13 @@ import outcome
 
 import trio
 
-from ._util import aiter_compat
 from ._core import enable_ki_protection, ParkingLot
 from ._deprecate import deprecated
-
-__all__ = [
-    "Event",
-    "CapacityLimiter",
-    "Semaphore",
-    "Lock",
-    "StrictFIFOLock",
-    "Condition",
-]
+from ._util import SubclassingDeprecatedIn_v0_15_0
 
 
 @attr.s(repr=False, eq=False, hash=False)
-class Event:
+class Event(metaclass=SubclassingDeprecatedIn_v0_15_0):
     """A waitable boolean value useful for inter-task synchronization,
     inspired by :class:`threading.Event`.
 
@@ -35,14 +26,14 @@ class Event:
     lost wakeups: it doesn't matter whether :meth:`set` gets called just
     before or after :meth:`wait`. If you want a lower-level wakeup
     primitive that doesn't have this protection, consider :class:`Condition`
-    or :class:`trio.hazmat.ParkingLot`.
+    or :class:`trio.lowlevel.ParkingLot`.
 
     .. note:: Unlike `threading.Event`, `trio.Event` has no
        `~threading.Event.clear` method. In Trio, once an `Event` has happened,
        it cannot un-happen. If you need to represent a series of events,
        consider creating a new `Event` object for each one (they're cheap!),
        or other synchronization methods like :ref:`channels <channels>` or
-       `trio.hazmat.ParkingLot`.
+       `trio.lowlevel.ParkingLot`.
 
     """
 
@@ -63,14 +54,6 @@ class Event:
         self._flag = True
         self._lot.unpark_all()
 
-    @deprecated(
-        "0.12.0",
-        issue=637,
-        instead="multiple Event objects or other synchronization primitives"
-    )
-    def clear(self):
-        self._flag = False
-
     async def wait(self):
         """Block until the internal flag value becomes True.
 
@@ -78,7 +61,7 @@ class Event:
 
         """
         if self._flag:
-            await trio.hazmat.checkpoint()
+            await trio.lowlevel.checkpoint()
         else:
             await self._lot.park()
 
@@ -120,7 +103,7 @@ class _CapacityLimiterStatistics:
 
 
 @async_cm
-class CapacityLimiter:
+class CapacityLimiter(metaclass=SubclassingDeprecatedIn_v0_15_0):
     """An object for controlling access to a resource with limited capacity.
 
     Sometimes you need to put a limit on how many tasks can do something at
@@ -245,7 +228,7 @@ class CapacityLimiter:
               tokens.
 
         """
-        self.acquire_on_behalf_of_nowait(trio.hazmat.current_task())
+        self.acquire_on_behalf_of_nowait(trio.lowlevel.current_task())
 
     @enable_ki_protection
     def acquire_on_behalf_of_nowait(self, borrower):
@@ -253,7 +236,7 @@ class CapacityLimiter:
         blocking.
 
         Args:
-          borrower: A :class:`trio.hazmat.Task` or arbitrary opaque object
+          borrower: A :class:`trio.lowlevel.Task` or arbitrary opaque object
              used to record who is borrowing this token. This is used by
              :func:`trio.to_thread.run_sync` to allow threads to "hold
              tokens", with the intention in the future of using it to `allow
@@ -285,7 +268,7 @@ class CapacityLimiter:
               tokens.
 
         """
-        await self.acquire_on_behalf_of(trio.hazmat.current_task())
+        await self.acquire_on_behalf_of(trio.lowlevel.current_task())
 
     @enable_ki_protection
     async def acquire_on_behalf_of(self, borrower):
@@ -293,7 +276,7 @@ class CapacityLimiter:
         necessary.
 
         Args:
-          borrower: A :class:`trio.hazmat.Task` or arbitrary opaque object
+          borrower: A :class:`trio.lowlevel.Task` or arbitrary opaque object
              used to record who is borrowing this token; see
              :meth:`acquire_on_behalf_of_nowait` for details.
 
@@ -302,11 +285,11 @@ class CapacityLimiter:
              tokens.
 
         """
-        await trio.hazmat.checkpoint_if_cancelled()
+        await trio.lowlevel.checkpoint_if_cancelled()
         try:
             self.acquire_on_behalf_of_nowait(borrower)
         except trio.WouldBlock:
-            task = trio.hazmat.current_task()
+            task = trio.lowlevel.current_task()
             self._pending_borrowers[task] = borrower
             try:
                 await self._lot.park()
@@ -314,7 +297,7 @@ class CapacityLimiter:
                 self._pending_borrowers.pop(task)
                 raise
         else:
-            await trio.hazmat.cancel_shielded_checkpoint()
+            await trio.lowlevel.cancel_shielded_checkpoint()
 
     @enable_ki_protection
     def release(self):
@@ -325,7 +308,7 @@ class CapacityLimiter:
               sack's tokens.
 
         """
-        self.release_on_behalf_of(trio.hazmat.current_task())
+        self.release_on_behalf_of(trio.lowlevel.current_task())
 
     @enable_ki_protection
     def release_on_behalf_of(self, borrower):
@@ -372,7 +355,7 @@ class CapacityLimiter:
 
 
 @async_cm
-class Semaphore:
+class Semaphore(metaclass=SubclassingDeprecatedIn_v0_15_0):
     """A `semaphore <https://en.wikipedia.org/wiki/Semaphore_(programming)>`__.
 
     A semaphore holds an integer value, which can be incremented by
@@ -412,7 +395,7 @@ class Semaphore:
         # Invariants:
         # bool(self._lot) implies self._value == 0
         # (or equivalently: self._value > 0 implies not self._lot)
-        self._lot = trio.hazmat.ParkingLot()
+        self._lot = trio.lowlevel.ParkingLot()
         self._value = initial_value
         self._max_value = max_value
 
@@ -461,13 +444,13 @@ class Semaphore:
         letting it drop below zero.
 
         """
-        await trio.hazmat.checkpoint_if_cancelled()
+        await trio.lowlevel.checkpoint_if_cancelled()
         try:
             self.acquire_nowait()
         except trio.WouldBlock:
             await self._lot.park()
         else:
-            await trio.hazmat.cancel_shielded_checkpoint()
+            await trio.lowlevel.cancel_shielded_checkpoint()
 
     @enable_ki_protection
     def release(self):
@@ -508,19 +491,7 @@ class _LockStatistics:
 
 @async_cm
 @attr.s(eq=False, hash=False, repr=False)
-class Lock:
-    """A classic `mutex
-    <https://en.wikipedia.org/wiki/Lock_(computer_science)>`__.
-
-    This is a non-reentrant, single-owner lock. Unlike
-    :class:`threading.Lock`, only the owner of the lock is allowed to release
-    it.
-
-    A :class:`Lock` object can be used as an async context manager; it
-    blocks on entry but not on exit.
-
-    """
-
+class _LockImpl:
     _lot = attr.ib(factory=ParkingLot, init=False)
     _owner = attr.ib(default=None, init=False)
 
@@ -555,7 +526,7 @@ class Lock:
 
         """
 
-        task = trio.hazmat.current_task()
+        task = trio.lowlevel.current_task()
         if self._owner is task:
             raise RuntimeError("attempt to re-acquire an already held Lock")
         elif self._owner is None and not self._lot:
@@ -569,7 +540,7 @@ class Lock:
         """Acquire the lock, blocking if necessary.
 
         """
-        await trio.hazmat.checkpoint_if_cancelled()
+        await trio.lowlevel.checkpoint_if_cancelled()
         try:
             self.acquire_nowait()
         except trio.WouldBlock:
@@ -578,7 +549,7 @@ class Lock:
             # lock as well.
             await self._lot.park()
         else:
-            await trio.hazmat.cancel_shielded_checkpoint()
+            await trio.lowlevel.cancel_shielded_checkpoint()
 
     @enable_ki_protection
     def release(self):
@@ -588,7 +559,7 @@ class Lock:
           RuntimeError: if the calling task does not hold the lock.
 
         """
-        task = trio.hazmat.current_task()
+        task = trio.lowlevel.current_task()
         if task is not self._owner:
             raise RuntimeError("can't release a Lock you don't own")
         if self._lot:
@@ -602,7 +573,7 @@ class Lock:
         Currently the following fields are defined:
 
         * ``locked``: boolean indicating whether the lock is held.
-        * ``owner``: the :class:`trio.hazmat.Task` currently holding the lock,
+        * ``owner``: the :class:`trio.lowlevel.Task` currently holding the lock,
           or None if the lock is not held.
         * ``tasks_waiting``: The number of tasks blocked on this lock's
           :meth:`acquire` method.
@@ -615,7 +586,21 @@ class Lock:
         )
 
 
-class StrictFIFOLock(Lock):
+class Lock(_LockImpl, metaclass=SubclassingDeprecatedIn_v0_15_0):
+    """A classic `mutex
+    <https://en.wikipedia.org/wiki/Lock_(computer_science)>`__.
+
+    This is a non-reentrant, single-owner lock. Unlike
+    :class:`threading.Lock`, only the owner of the lock is allowed to release
+    it.
+
+    A :class:`Lock` object can be used as an async context manager; it
+    blocks on entry but not on exit.
+
+    """
+
+
+class StrictFIFOLock(_LockImpl, metaclass=SubclassingDeprecatedIn_v0_15_0):
     r"""A variant of :class:`Lock` where tasks are guaranteed to acquire the
     lock in strict first-come-first-served order.
 
@@ -667,7 +652,7 @@ class StrictFIFOLock(Lock):
     :class:`StrictFIFOLock` guarantees that each task will send its data in
     the same order that the state machine generated it.
 
-    Currently, :class:`StrictFIFOLock` is simply an alias for :class:`Lock`,
+    Currently, :class:`StrictFIFOLock` is identical to :class:`Lock`,
     but (a) this may not always be true in the future, especially if Trio ever
     implements `more sophisticated scheduling policies
     <https://github.com/python-trio/trio/issues/32>`__, and (b) the above code
@@ -685,7 +670,7 @@ class _ConditionStatistics:
 
 
 @async_cm
-class Condition:
+class Condition(metaclass=SubclassingDeprecatedIn_v0_15_0):
     """A classic `condition variable
     <https://en.wikipedia.org/wiki/Monitor_(synchronization)>`__, similar to
     :class:`threading.Condition`.
@@ -705,7 +690,7 @@ class Condition:
         if not type(lock) is Lock:
             raise TypeError("lock must be a trio.Lock")
         self._lock = lock
-        self._lot = trio.hazmat.ParkingLot()
+        self._lot = trio.lowlevel.ParkingLot()
 
     def locked(self):
         """Check whether the underlying lock is currently held.
@@ -761,7 +746,7 @@ class Condition:
           RuntimeError: if the calling task does not hold the lock.
 
         """
-        if trio.hazmat.current_task() is not self._lock._owner:
+        if trio.lowlevel.current_task() is not self._lock._owner:
             raise RuntimeError("must hold the lock to wait")
         self.release()
         # NOTE: we go to sleep on self._lot, but we'll wake up on
@@ -783,7 +768,7 @@ class Condition:
           RuntimeError: if the calling task does not hold the lock.
 
         """
-        if trio.hazmat.current_task() is not self._lock._owner:
+        if trio.lowlevel.current_task() is not self._lock._owner:
             raise RuntimeError("must hold the lock to notify")
         self._lot.repark(self._lock._lot, count=n)
 
@@ -794,7 +779,7 @@ class Condition:
           RuntimeError: if the calling task does not hold the lock.
 
         """
-        if trio.hazmat.current_task() is not self._lock._owner:
+        if trio.lowlevel.current_task() is not self._lock._owner:
             raise RuntimeError("must hold the lock to notify")
         self._lot.repark_all(self._lock._lot)
 

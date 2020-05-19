@@ -5,10 +5,8 @@ from contextlib import contextmanager
 
 import trio
 from . import socket as tsocket
-from ._util import ConflictDetector
+from ._util import ConflictDetector, SubclassingDeprecatedIn_v0_15_0
 from .abc import HalfCloseableStream, Listener
-
-__all__ = ["SocketStream", "SocketListener"]
 
 # XX TODO: this number was picked arbitrarily. We should do experiments to
 # tune it. (Or make it dynamic -- one idea is to start small and increase it
@@ -39,7 +37,9 @@ def _translate_socket_errors_to_stream_errors():
             ) from exc
 
 
-class SocketStream(HalfCloseableStream):
+class SocketStream(
+    HalfCloseableStream, metaclass=SubclassingDeprecatedIn_v0_15_0
+):
     """An implementation of the :class:`trio.abc.HalfCloseableStream`
     interface based on a raw network socket.
 
@@ -109,7 +109,7 @@ class SocketStream(HalfCloseableStream):
                             raise trio.ClosedResourceError(
                                 "socket was already closed"
                             )
-                        await trio.hazmat.checkpoint()
+                        await trio.lowlevel.checkpoint()
                         return
                     total_sent = 0
                     while total_sent < len(data):
@@ -126,7 +126,7 @@ class SocketStream(HalfCloseableStream):
 
     async def send_eof(self):
         with self._send_conflict_detector:
-            await trio.hazmat.checkpoint()
+            await trio.lowlevel.checkpoint()
             # On macOS, calling shutdown a second time raises ENOTCONN, but
             # send_eof needs to be idempotent.
             if self.socket.did_shutdown_SHUT_WR:
@@ -144,7 +144,7 @@ class SocketStream(HalfCloseableStream):
 
     async def aclose(self):
         self.socket.close()
-        await trio.hazmat.checkpoint()
+        await trio.lowlevel.checkpoint()
 
     # __aenter__, __aexit__ inherited from HalfCloseableStream are OK
 
@@ -322,7 +322,9 @@ for name in _ignorable_accept_errno_names:
         pass
 
 
-class SocketListener(Listener[SocketStream]):
+class SocketListener(
+    Listener[SocketStream], metaclass=SubclassingDeprecatedIn_v0_15_0
+):
     """A :class:`~trio.abc.Listener` that uses a listening socket to accept
     incoming connections as :class:`SocketStream` objects.
 
@@ -389,4 +391,4 @@ class SocketListener(Listener[SocketStream]):
 
         """
         self.socket.close()
-        await trio.hazmat.checkpoint()
+        await trio.lowlevel.checkpoint()

@@ -158,7 +158,7 @@ import trio
 from .abc import Stream, Listener
 from ._highlevel_generic import aclose_forcefully
 from . import _sync
-from ._util import ConflictDetector
+from ._util import ConflictDetector, SubclassingDeprecatedIn_v0_15_0
 from ._deprecate import warn_deprecated
 
 ################################################################
@@ -224,7 +224,7 @@ class _Once:
 _State = _Enum("_State", ["OK", "BROKEN", "CLOSED"])
 
 
-class SSLStream(Stream):
+class SSLStream(Stream, metaclass=SubclassingDeprecatedIn_v0_15_0):
     r"""Encrypted communication using SSL/TLS.
 
     :class:`SSLStream` wraps an arbitrary :class:`~trio.abc.Stream`, and
@@ -432,7 +432,7 @@ class SSLStream(Stream):
     async def _retry(
         self, fn, *args, ignore_want_read=False, is_handshake=False
     ):
-        await trio.hazmat.checkpoint_if_cancelled()
+        await trio.lowlevel.checkpoint_if_cancelled()
         yielded = False
         finished = False
         while not finished:
@@ -598,7 +598,7 @@ class SSLStream(Stream):
                             self._incoming.write(data)
                         self._inner_recv_count += 1
         if not yielded:
-            await trio.hazmat.cancel_shielded_checkpoint()
+            await trio.lowlevel.cancel_shielded_checkpoint()
         return ret
 
     async def _do_handshake(self):
@@ -670,7 +670,7 @@ class SSLStream(Stream):
                         (_stdlib_ssl.SSLEOFError, _stdlib_ssl.SSLSyscallError)
                     )
                 ):
-                    await trio.hazmat.checkpoint()
+                    await trio.lowlevel.checkpoint()
                     return b""
                 else:
                     raise
@@ -697,7 +697,7 @@ class SSLStream(Stream):
                     self._https_compatible
                     and isinstance(exc.__cause__, _stdlib_ssl.SSLEOFError)
                 ):
-                    await trio.hazmat.checkpoint()
+                    await trio.lowlevel.checkpoint()
                     return b""
                 else:
                     raise
@@ -719,7 +719,7 @@ class SSLStream(Stream):
             # SSLObject interprets write(b"") as an EOF for some reason, which
             # is not what we want.
             if not data:
-                await trio.hazmat.checkpoint()
+                await trio.lowlevel.checkpoint()
                 return
             await self._retry(self._ssl_object.write, data)
 
@@ -763,7 +763,7 @@ class SSLStream(Stream):
 
         """
         if self._state is _State.CLOSED:
-            await trio.hazmat.checkpoint()
+            await trio.lowlevel.checkpoint()
             return
         if self._state is _State.BROKEN or self._https_compatible:
             self._state = _State.CLOSED
@@ -882,7 +882,9 @@ class SSLStream(Stream):
                 await self.transport_stream.wait_send_all_might_not_block()
 
 
-class SSLListener(Listener[SSLStream]):
+class SSLListener(
+    Listener[SSLStream], metaclass=SubclassingDeprecatedIn_v0_15_0
+):
     """A :class:`~trio.abc.Listener` for SSL/TLS-encrypted servers.
 
     :class:`SSLListener` wraps around another Listener, and converts

@@ -5,7 +5,7 @@
 #    pip-compile --output-file test-requirements.txt test-requirements.in
 #
 astor==0.8.1              # via -r test-requirements.in
-astroid==2.3.3            # via pylint
+astroid==2.4.1            # via pylint
 async-generator==1.10     # via -r test-requirements.in
 attrs==19.3.0             # via -r test-requirements.in, outcome, pytest
 backcall==0.1.0           # via ipython
@@ -13,40 +13,40 @@ cffi==1.14.0              # via cryptography
 coverage==5.1             # via pytest-cov
 cryptography==2.9.2       # via pyopenssl, trustme
 decorator==4.4.2          # via ipython, traitlets
-entrypoints==0.3          # via flake8
-flake8==3.7.9             # via -r test-requirements.in
+flake8==3.8.1             # via -r test-requirements.in
 idna==2.9                 # via -r test-requirements.in, trustme
-immutables==0.12          # via -r test-requirements.in
+immutables==0.14          # via -r test-requirements.in
 ipython-genutils==0.2.0   # via traitlets
-ipython==7.9.0            # via -r test-requirements.in
+ipython==7.14.0           # via -r test-requirements.in
 isort==4.3.21             # via pylint
-jedi==0.16.0              # via -r test-requirements.in, ipython
+jedi==0.17.0              # via -r test-requirements.in, ipython
 lazy-object-proxy==1.4.3  # via astroid
 mccabe==0.6.1             # via flake8, pylint
-more-itertools==8.2.0     # via pytest
+more-itertools==8.3.0     # via pytest
 outcome==1.0.1            # via -r test-requirements.in
 packaging==20.3           # via pytest
 parso==0.7.0              # via jedi
 pexpect==4.8.0            # via ipython
 pickleshare==0.7.5        # via ipython
 pluggy==0.13.1            # via pytest
-prompt-toolkit==2.0.10    # via ipython
+prompt-toolkit==3.0.5     # via ipython
 ptyprocess==0.6.0         # via pexpect
 py==1.8.1                 # via pytest
-pycodestyle==2.5.0        # via flake8
+pycodestyle==2.6.0        # via flake8
 pycparser==2.20           # via cffi
-pyflakes==2.1.1           # via flake8
+pyflakes==2.2.0           # via flake8
 pygments==2.6.1           # via ipython
-pylint==2.4.2             # via -r test-requirements.in
+pylint==2.5.2             # via -r test-requirements.in
 pyopenssl==19.1.0         # via -r test-requirements.in
 pyparsing==2.4.7          # via packaging
 pytest-cov==2.8.1         # via -r test-requirements.in
-pytest==5.4.1             # via -r test-requirements.in, pytest-cov
-six==1.14.0               # via astroid, cryptography, packaging, prompt-toolkit, pyopenssl, traitlets
+pytest==5.4.2             # via -r test-requirements.in, pytest-cov
+six==1.14.0               # via astroid, cryptography, packaging, pyopenssl, traitlets
 sniffio==1.1.0            # via -r test-requirements.in
 sortedcontainers==2.1.0   # via -r test-requirements.in
+toml==0.10.1              # via pylint
 traitlets==4.3.3          # via ipython
 trustme==0.6.0            # via -r test-requirements.in
 wcwidth==0.1.9            # via prompt-toolkit, pytest
-wrapt==1.11.2             # via astroid
+wrapt==1.12.1             # via astroid
 yapf==0.30.0              # via -r test-requirements.in

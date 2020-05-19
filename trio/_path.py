@@ -4,20 +4,7 @@ import types
 import pathlib
 
 import trio
-from trio._util import async_wraps, fspath
-
-__all__ = ['Path']
-
-
-# python3.5 compat: __fspath__ does not exist in 3.5, so unwrap any trio.Path
-# being passed to any wrapped method
-def unwrap_paths(args):
-    new_args = []
-    for arg in args:
-        if isinstance(arg, Path):
-            arg = arg._wrapped
-        new_args.append(arg)
-    return new_args
+from trio._util import async_wraps, SubclassingDeprecatedIn_v0_15_0
 
 
 # re-wrap return value from methods that return new instances of pathlib.Path
@@ -30,7 +17,6 @@ def rewrap_path(value):
 def _forward_factory(cls, attr_name, attr):
     @wraps(attr)
     def wrapper(self, *args, **kwargs):
-        args = unwrap_paths(args)
         attr = getattr(self._wrapped, attr_name)
         value = attr(*args, **kwargs)
         return rewrap_path(value)
@@ -69,7 +55,6 @@ def iter_wrapper_factory(cls, meth_name):
 def thread_wrapper_factory(cls, meth_name):
     @async_wraps(cls, cls._wraps, meth_name)
     async def wrapper(self, *args, **kwargs):
-        args = unwrap_paths(args)
         meth = getattr(self._wrapped, meth_name)
         func = partial(meth, *args, **kwargs)
         value = await trio.to_thread.run_sync(func)
@@ -82,7 +67,6 @@ def classmethod_wrapper_factory(cls, meth_name):
     @classmethod
     @async_wraps(cls, cls._wraps, meth_name)
     async def wrapper(cls, *args, **kwargs):
-        args = unwrap_paths(args)
         meth = getattr(cls._wraps, meth_name)
         func = partial(meth, *args, **kwargs)
         value = await trio.to_thread.run_sync(func)
@@ -91,7 +75,7 @@ def classmethod_wrapper_factory(cls, meth_name):
     return wrapper
 
 
-class AsyncAutoWrapperType(type):
+class AsyncAutoWrapperType(SubclassingDeprecatedIn_v0_15_0):
     def __init__(cls, name, bases, attrs):
         super().__init__(name, bases, attrs)
 
@@ -168,8 +152,6 @@ class Path(metaclass=AsyncAutoWrapperType):
     _wrap_iter = ['glob', 'rglob', 'iterdir']
 
     def __init__(self, *args):
-        args = unwrap_paths(args)
-
         self._wrapped = pathlib.Path(*args)
 
     def __getattr__(self, name):
@@ -185,7 +167,7 @@ class Path(metaclass=AsyncAutoWrapperType):
         return 'trio.Path({})'.format(repr(str(self)))
 
     def __fspath__(self):
-        return fspath(self._wrapped)
+        return os.fspath(self._wrapped)
 
     @wraps(pathlib.Path.open)
     async def open(self, *args, **kwargs):
@@ -219,6 +201,4 @@ Path.iterdir.__doc__ = """
 # sense than inventing our own special docstring for this.
 del Path.absolute.__doc__
 
-# python3.5 compat
-if hasattr(os, 'PathLike'):
-    os.PathLike.register(Path)
+os.PathLike.register(Path)

@@ -1,6 +1,10 @@
 name: CI
 
-on: [pull_request]
+on:
+  push:
+    branches:
+      - master
+  pull_request:
 
 jobs:
   Windows:
@@ -8,8 +12,9 @@ jobs:
     timeout-minutes: 20
     runs-on: 'windows-latest'
     strategy:
+      fail-fast: false
       matrix:
-        python: ['3.5', '3.6', '3.7', '3.8']
+        python: ['3.6', '3.7', '3.8']
         arch: ['x86', 'x64']
         lsp: ['']
         extra_name: ['']
@@ -38,13 +43,14 @@ jobs:
           # Should match 'name:' up above
           JOB_NAME: 'Windows (${{ matrix.python }}, ${{ matrix.arch }}${{ matrix.extra_name }})'
 
-  Linux:
-    name: 'Linux (${{ matrix.python }}${{ matrix.extra_name }})'
+  Ubuntu:
+    name: 'Ubuntu (${{ matrix.python }}${{ matrix.extra_name }})'
     timeout-minutes: 10
     runs-on: 'ubuntu-latest'
     strategy:
+      fail-fast: false
       matrix:
-        python: ['3.5', '3.6', '3.7', '3.8']
+        python: ['3.6', '3.7', '3.8']
         check_docs: ['0']
         check_formatting: ['0']
         extra_name: ['']
@@ -68,15 +74,16 @@ jobs:
           CHECK_DOCS: '${{ matrix.check_docs }}'
           CHECK_FORMATTING: '${{ matrix.check_formatting }}'
           # Should match 'name:' up above
-          JOB_NAME: 'Linux (${{ matrix.python }}${{ matrix.extra_name }})'
+          JOB_NAME: 'Ubuntu (${{ matrix.python }}${{ matrix.extra_name }})'
 
   macOS:
     name: 'macOS (${{ matrix.python }})'
     timeout-minutes: 10
     runs-on: 'macos-latest'
     strategy:
+      fail-fast: false
       matrix:
-        python: ['3.5', '3.6', '3.7', '3.8']
+        python: ['3.6', '3.7', '3.8']
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -89,3 +96,21 @@ jobs:
         env:
           # Should match 'name:' up above
           JOB_NAME: 'macOS (${{ matrix.python }})'
+
+  Alpine:
+    name: 'Alpine'
+    timeout-minutes: 10
+    runs-on: 'ubuntu-latest'
+    container: 'alpine'
+    strategy:
+      fail-fast: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Install bash
+        run: apk add --no-cache bash
+      - name: Run tests
+        run: ./ci.sh
+        env:
+          # Should match 'name:' up above
+          JOB_NAME: 'Alpine'
