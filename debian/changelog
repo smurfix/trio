@@ -1,3 +1,10 @@
+trio (0.15.1-2) unstable; urgency=medium
+
+  * Require outcome >= 1.0.1
+    actually attr breaks 1.0.0, but oh well.
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Tue, 02 Jun 2020 16:56:39 +0200
+
 trio (0.15.1-1) unstable; urgency=medium
 
   * Merge
