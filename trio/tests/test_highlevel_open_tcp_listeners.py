@@ -6,9 +6,7 @@ import errno
 import attr
 
 import trio
-from trio import (
-    open_tcp_listeners, serve_tcp, SocketListener, open_tcp_stream
-)
+from trio import open_tcp_listeners, serve_tcp, SocketListener, open_tcp_stream
 from trio.testing import open_stream_to_socket_listener
 from .. import socket as tsocket
 from .._core.tests.tutil import slow, creates_ipv6, binds_ipv6
@@ -54,75 +52,15 @@ async def test_open_tcp_listeners_specific_port_specific_host():
         assert listener.socket.getsockname() == (host, port)
 
 
-# Warning: this sleeps, and needs to use a real sleep -- MockClock won't
-# work.
-#
-# Also, this measurement technique often works, but not always: sometimes SYN
-# cookies get triggered, and then the backlog measured this way effectively
-# becomes infinite. (In particular, this has been observed happening on
-# Travis-CI.) To avoid this blowing up and eating all FDs / ephemeral ports,
-# we put an upper limit on the number of connections we attempt, and if we hit
-# it then we return the magic string "lots". Then
-# test_open_tcp_listeners_backlog uses a special path to handle this, treating
-# it as a success -- but at least we'll see in coverage if none of our test
-# runs are actually running the test properly.
-async def measure_backlog(listener, limit):
-    client_streams = []
-    try:
-        while True:
-            # Generally the response to the listen buffer being full is that
-            # the SYN gets dropped, and the client retries after 1 second. So
-            # we assume that any connect() call to localhost that takes >0.5
-            # seconds indicates a dropped SYN.
-            #
-            # Exception: on FreeBSD when the backlog is exhausted, connect
-            # has been observed to sometimes raise ConnectionResetError.
-            with trio.move_on_after(0.5) as cancel_scope:
-                try:
-                    client_stream = await open_stream_to_socket_listener(
-                        listener
-                    )
-                except ConnectionResetError:  # pragma: no cover
-                    break
-                client_streams.append(client_stream)
-            if cancel_scope.cancelled_caught:
-                break
-            if len(client_streams) >= limit:  # pragma: no cover
-                return "lots"
-    finally:
-        # The need for "no cover" here is subtle: see
-        # https://github.com/python-trio/trio/issues/522
-        for client_stream in client_streams:  # pragma: no cover
-            await client_stream.aclose()
-
-    return len(client_streams)
-
-
-@slow
-async def test_open_tcp_listeners_backlog():
-    # Operating systems don't necessarily use the exact backlog you pass
-    async def check_backlog(nominal, required_min, required_max):
-        listeners = await open_tcp_listeners(0, backlog=nominal)
-        actual = await measure_backlog(listeners[0], required_max + 10)
-        for listener in listeners:
-            await listener.aclose()
-        print("nominal", nominal, "actual", actual)
-        if actual == "lots":  # pragma: no cover
-            return
-        assert required_min <= actual <= required_max
-
-    await check_backlog(nominal=1, required_min=1, required_max=10)
-    await check_backlog(nominal=11, required_min=11, required_max=20)
-
-
 @binds_ipv6
 async def test_open_tcp_listeners_ipv6_v6only():
     # Check IPV6_V6ONLY is working properly
     (ipv6_listener,) = await open_tcp_listeners(0, host="::1")
-    _, port, *_ = ipv6_listener.socket.getsockname()
+    async with ipv6_listener:
+        _, port, *_ = ipv6_listener.socket.getsockname()
 
-    with pytest.raises(OSError):
-        await open_tcp_stream("127.0.0.1", port)
+        with pytest.raises(OSError):
+            await open_tcp_stream("127.0.0.1", port)
 
 
 async def test_open_tcp_listeners_rebind():
@@ -131,10 +69,10 @@ async def test_open_tcp_listeners_rebind():
 
     # Plain old rebinding while it's still there should fail, even if we have
     # SO_REUSEADDR set
-    probe = stdlib_socket.socket()
-    probe.setsockopt(stdlib_socket.SOL_SOCKET, stdlib_socket.SO_REUSEADDR, 1)
-    with pytest.raises(OSError):
-        probe.bind(sockaddr1)
+    with stdlib_socket.socket() as probe:
+        probe.setsockopt(stdlib_socket.SOL_SOCKET, stdlib_socket.SO_REUSEADDR, 1)
+        with pytest.raises(OSError):
+            probe.bind(sockaddr1)
 
     # Now use the first listener to set up some connections in various states,
     # and make sure that they don't create any obstacle to rebinding a second
@@ -178,6 +116,7 @@ class FakeSocket(tsocket.SocketType):
 
     closed = attr.ib(default=False)
     poison_listen = attr.ib(default=False)
+    backlog = attr.ib(default=None)
 
     def getsockopt(self, level, option):
         if (level, option) == (tsocket.SOL_SOCKET, tsocket.SO_ACCEPTCONN):
@@ -191,6 +130,9 @@ class FakeSocket(tsocket.SocketType):
         pass
 
     def listen(self, backlog):
+        assert self.backlog is None
+        assert backlog is not None
+        self.backlog = backlog
         if self.poison_listen:
             raise FakeOSError("whoops")
 
@@ -272,28 +214,18 @@ async def test_serve_tcp():
 
 
 @pytest.mark.parametrize(
-    "try_families", [
-        {tsocket.AF_INET},
-        {tsocket.AF_INET6},
-        {tsocket.AF_INET, tsocket.AF_INET6},
-    ]
+    "try_families",
+    [{tsocket.AF_INET}, {tsocket.AF_INET6}, {tsocket.AF_INET, tsocket.AF_INET6}],
 )
 @pytest.mark.parametrize(
-    "fail_families", [
-        {tsocket.AF_INET},
-        {tsocket.AF_INET6},
-        {tsocket.AF_INET, tsocket.AF_INET6},
-    ]
+    "fail_families",
+    [{tsocket.AF_INET}, {tsocket.AF_INET6}, {tsocket.AF_INET, tsocket.AF_INET6}],
 )
 async def test_open_tcp_listeners_some_address_families_unavailable(
     try_families, fail_families
 ):
     fsf = FakeSocketFactory(
-        10,
-        raise_on_family={
-            family: errno.EAFNOSUPPORT
-            for family in fail_families
-        }
+        10, raise_on_family={family: errno.EAFNOSUPPORT for family in fail_families}
     )
     tsocket.set_custom_socket_factory(fsf)
     tsocket.set_custom_hostname_resolver(
@@ -326,13 +258,11 @@ async def test_open_tcp_listeners_socket_fails_not_afnosupport():
         raise_on_family={
             tsocket.AF_INET: errno.EAFNOSUPPORT,
             tsocket.AF_INET6: errno.EINVAL,
-        }
+        },
     )
     tsocket.set_custom_socket_factory(fsf)
     tsocket.set_custom_hostname_resolver(
-        FakeHostnameResolver(
-            [(tsocket.AF_INET, "foo"), (tsocket.AF_INET6, "bar")]
-        )
+        FakeHostnameResolver([(tsocket.AF_INET, "foo"), (tsocket.AF_INET6, "bar")])
     )
 
     with pytest.raises(OSError) as exc_info:
@@ -340,3 +270,26 @@ async def test_open_tcp_listeners_socket_fails_not_afnosupport():
     assert exc_info.value.errno == errno.EINVAL
     assert exc_info.value.__cause__ is None
     assert "nope" in str(exc_info.value)
+
+
+# We used to have an elaborate test that opened a real TCP listening socket
+# and then tried to measure its backlog by making connections to it. And most
+# of the time, it worked. But no matter what we tried, it was always fragile,
+# because it had to do things like use timeouts to guess when the listening
+# queue was full, sometimes the CI hosts go into SYN-cookie mode (where there
+# effectively is no backlog), sometimes the host might not be enough resources
+# to give us the full requested backlog... it was a mess. So now we just check
+# that the backlog argument is passed through correctly.
+async def test_open_tcp_listeners_backlog():
+    fsf = FakeSocketFactory(99)
+    tsocket.set_custom_socket_factory(fsf)
+    for (given, expected) in [
+        (None, 0xFFFF),
+        (99999999, 0xFFFF),
+        (10, 10),
+        (1, 1),
+    ]:
+        listeners = await open_tcp_listeners(0, backlog=given)
+        assert listeners
+        for listener in listeners:
+            assert listener.socket.backlog == expected

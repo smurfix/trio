@@ -1,6 +1,8 @@
 # Utilities for testing
 import socket as stdlib_socket
 import os
+import sys
+from typing import TYPE_CHECKING
 
 import pytest
 import warnings
@@ -10,15 +12,23 @@ import gc
 
 # See trio/tests/conftest.py for the other half of this
 from trio.tests.conftest import RUN_SLOW
-slow = pytest.mark.skipif(
-    not RUN_SLOW,
-    reason="use --run-slow to run slow tests",
+
+slow = pytest.mark.skipif(not RUN_SLOW, reason="use --run-slow to run slow tests")
+
+# PyPy 7.2 was released with a bug that just never called the async
+# generator 'firstiter' hook at all.  This impacts tests of end-of-run
+# finalization (nothing gets added to runner.asyncgens) and tests of
+# "foreign" async generator behavior (since the firstiter hook is what
+# marks the asyncgen as foreign), but most tests of GC-mediated
+# finalization still work.
+buggy_pypy_asyncgens = (
+    not TYPE_CHECKING
+    and sys.implementation.name == "pypy"
+    and sys.pypy_version_info < (7, 3)
 )
 
 try:
-    s = stdlib_socket.socket(
-        stdlib_socket.AF_INET6, stdlib_socket.SOCK_STREAM, 0
-    )
+    s = stdlib_socket.socket(stdlib_socket.AF_INET6, stdlib_socket.SOCK_STREAM, 0)
 except OSError:  # pragma: no cover
     # Some systems don't even support creating an IPv6 socket, let alone
     # binding it. (ex: Linux with 'ipv6.disable=1' in the kernel command line)
@@ -30,7 +40,7 @@ else:
     can_create_ipv6 = True
     with s:
         try:
-            s.bind(('::1', 0))
+            s.bind(("::1", 0))
         except OSError:
             can_bind_ipv6 = False
         else:
@@ -61,9 +71,7 @@ def gc_collect_harder():
 @contextmanager
 def ignore_coroutine_never_awaited_warnings():
     with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", message="coroutine '.*' was never awaited"
-        )
+        warnings.filterwarnings("ignore", message="coroutine '.*' was never awaited")
         try:
             yield
         finally:
@@ -79,14 +87,16 @@ def check_sequence_matches(seq, template):
     for pattern in template:
         if not isinstance(pattern, set):
             pattern = {pattern}
-        got = set(seq[i:i + len(pattern)])
+        got = set(seq[i : i + len(pattern)])
         assert got == pattern
         i += len(got)
 
 
 # https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=246350
 skip_if_fbsd_pipes_broken = pytest.mark.skipif(
-    hasattr(os, "uname") and os.uname().sysname == "FreeBSD"
+    sys.platform != "win32"  # prevent mypy from complaining about missing uname
+    and hasattr(os, "uname")
+    and os.uname().sysname == "FreeBSD"
     and os.uname().release[:4] < "12.2",
-    reason="hangs on FreeBSD 12.1 and earlier, due to FreeBSD bug #246350"
+    reason="hangs on FreeBSD 12.1 and earlier, due to FreeBSD bug #246350",
 )

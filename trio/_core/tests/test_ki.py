@@ -8,7 +8,10 @@ import contextlib
 import time
 
 from async_generator import (
-    async_generator, yield_, isasyncgenfunction, asynccontextmanager
+    async_generator,
+    yield_,
+    isasyncgenfunction,
+    asynccontextmanager,
 )
 
 from ... import _core
@@ -107,6 +110,7 @@ async def test_ki_enabled_after_yield_briefly():
 
     async def child(expected):
         import traceback
+
         traceback.print_stack()
         assert _core.currently_ki_protected() == expected
         await _core.checkpoint()
@@ -218,8 +222,8 @@ async def test_agen_protection():
 
 
 # Test the case where there's no magic local anywhere in the call stack
-def test_ki_enabled_out_of_context():
-    assert not _core.currently_ki_protected()
+def test_ki_disabled_out_of_context():
+    assert _core.currently_ki_protected()
 
 
 def test_ki_disabled_in_del():
@@ -230,8 +234,15 @@ def test_ki_disabled_in_del():
         assert _core.currently_ki_protected()
         assert nestedfunction()
 
+    @_core.disable_ki_protection
+    def outerfunction():
+        assert not _core.currently_ki_protected()
+        assert not nestedfunction()
+        __del__()
+
     __del__()
-    assert not nestedfunction()
+    outerfunction()
+    assert nestedfunction()
 
 
 def test_ki_protection_works():
@@ -259,9 +270,7 @@ def test_ki_protection_works():
             # If we didn't raise (b/c protected), then we *should* get
             # cancelled at the next opportunity
             try:
-                await _core.wait_task_rescheduled(
-                    lambda _: _core.Abort.SUCCEEDED
-                )
+                await _core.wait_task_rescheduled(lambda _: _core.Abort.SUCCEEDED)
             except _core.Cancelled:
                 record.add(name + " cancel ok")
 
@@ -288,9 +297,7 @@ def test_ki_protection_works():
         async with _core.open_nursery() as nursery:
             nursery.start_soon(sleeper, "s1", record)
             nursery.start_soon(sleeper, "s2", record)
-            nursery.start_soon(
-                _core.enable_ki_protection(raiser), "r1", record
-            )
+            nursery.start_soon(_core.enable_ki_protection(raiser), "r1", record)
             # __aexit__ blocks, and then receives the KI
 
     with pytest.raises(KeyboardInterrupt):
@@ -487,9 +494,7 @@ def test_ki_with_broken_threads():
 
         @_core.enable_ki_protection
         async def inner():
-            assert signal.getsignal(
-                signal.SIGINT
-            ) != signal.default_int_handler
+            assert signal.getsignal(signal.SIGINT) != signal.default_int_handler
 
         _core.run(inner)
     finally:
@@ -537,9 +542,9 @@ def test_ki_wakes_us_up():
     #   https://bugs.python.org/issue31119
     #   https://bitbucket.org/pypy/pypy/issues/2623
     import platform
+
     buggy_wakeup_fd = (
-        platform.python_implementation() == "CPython" and sys.version_info <
-        (3, 6, 2)
+        sys.version_info < (3, 6, 2) and platform.python_implementation() == "CPython"
     )
 
     # lock is only needed to avoid an annoying race condition where the

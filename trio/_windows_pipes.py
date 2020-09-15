@@ -1,7 +1,11 @@
+import sys
+from typing import TYPE_CHECKING
 from . import _core
 from ._abc import SendStream, ReceiveStream
 from ._util import ConflictDetector, Final
 from ._core._windows_cffi import _handle, raise_winerror, kernel32, ffi
+
+assert sys.platform == "win32" or not TYPE_CHECKING
 
 # XX TODO: don't just make this up based on nothing.
 DEFAULT_RECEIVE_SIZE = 65536
@@ -41,6 +45,7 @@ class PipeSendStream(SendStream, metaclass=Final):
     """Represents a send stream over a Windows named pipe that has been
     opened in OVERLAPPED mode.
     """
+
     def __init__(self, handle: int) -> None:
         self._handle_holder = _HandleHolder(handle)
         self._conflict_detector = ConflictDetector(
@@ -57,9 +62,7 @@ class PipeSendStream(SendStream, metaclass=Final):
                 return
 
             try:
-                written = await _core.write_overlapped(
-                    self._handle_holder.handle, data
-                )
+                written = await _core.write_overlapped(self._handle_holder.handle, data)
             except BrokenPipeError as ex:
                 raise _core.BrokenResourceError from ex
             # By my reading of MSDN, this assert is guaranteed to pass so long
@@ -81,6 +84,7 @@ class PipeSendStream(SendStream, metaclass=Final):
 
 class PipeReceiveStream(ReceiveStream, metaclass=Final):
     """Represents a receive stream over an os.pipe object."""
+
     def __init__(self, handle: int) -> None:
         self._handle_holder = _HandleHolder(handle)
         self._conflict_detector = ConflictDetector(

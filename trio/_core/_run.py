@@ -1,3 +1,5 @@
+# coding: utf-8
+
 import functools
 import itertools
 import logging
@@ -8,34 +10,47 @@ import sys
 import threading
 from collections import deque
 import collections.abc
-from contextlib import contextmanager, closing
+from contextlib import contextmanager
+import warnings
+import weakref
+import enum
 
 from contextvars import copy_context
 from math import inf
 from time import perf_counter
+from typing import Callable, TYPE_CHECKING
 
 from sniffio import current_async_library_cvar
 
 import attr
+from heapq import heapify, heappop, heappush
 from sortedcontainers import SortedDict
-from outcome import Error, Value, capture
+from outcome import Error, Outcome, Value, capture
 
 from ._entry_queue import EntryQueue, TrioToken
-from ._exceptions import (TrioInternalError, RunFinishedError, Cancelled)
+from ._exceptions import TrioInternalError, RunFinishedError, Cancelled
 from ._ki import (
-    LOCALS_KEY_KI_PROTECTION_ENABLED, ki_manager, enable_ki_protection
+    LOCALS_KEY_KI_PROTECTION_ENABLED,
+    KIManager,
+    enable_ki_protection,
 )
 from ._multierror import MultiError
 from ._traps import (
     Abort,
     wait_task_rescheduled,
+    cancel_shielded_checkpoint,
     CancelShieldedCheckpoint,
     PermanentlyDetachCoroutineObject,
     WaitTaskRescheduled,
 )
+from ._asyncgens import AsyncGenerators
+from ._thread_cache import start_thread_soon
+from ._instrumentation import Instruments
 from .. import _core
-from .._deprecate import deprecated
+from .._deprecate import warn_deprecated
 from .._util import Final, NoPublicConstructor, coroutine_or_error
+
+DEADLINE_HEAP_MIN_PRUNE_THRESHOLD = 1000
 
 _NO_SEND = object()
 
@@ -53,9 +68,6 @@ def _public(fn):
 # scheduling loop deterministic.  We have a test for that, of course.
 _ALLOW_DETERMINISTIC_SCHEDULING = False
 _r = random.Random()
-
-# Used to log exceptions in instruments
-INSTRUMENT_LOGGER = logging.getLogger("trio.abc.Instrument")
 
 
 # On 3.7+, Context.run() is implemented in C and doesn't show up in
@@ -106,9 +118,83 @@ class SystemClock:
         return deadline - self.current_time()
 
 
+class IdlePrimedTypes(enum.Enum):
+    WAITING_FOR_IDLE = 1
+    AUTOJUMP_CLOCK = 2
+
+
 ################################################################
 # CancelScope and friends
 ################################################################
+
+
+@attr.s(eq=False, slots=True)
+class Deadlines:
+    """A container of deadlined cancel scopes.
+
+    Only contains scopes with non-infinite deadlines that are currently
+    attached to at least one task.
+
+    """
+
+    # Heap of (deadline, id(CancelScope), CancelScope)
+    _heap = attr.ib(factory=list)
+    # Count of active deadlines (those that haven't been changed)
+    _active = attr.ib(default=0)
+
+    def add(self, deadline, cancel_scope):
+        heappush(self._heap, (deadline, id(cancel_scope), cancel_scope))
+        self._active += 1
+
+    def remove(self, deadline, cancel_scope):
+        self._active -= 1
+
+    def next_deadline(self):
+        while self._heap:
+            deadline, _, cancel_scope = self._heap[0]
+            if deadline == cancel_scope._registered_deadline:
+                return deadline
+            else:
+                # This entry is stale; discard it and try again
+                heappop(self._heap)
+        return inf
+
+    def _prune(self):
+        # In principle, it's possible for a cancel scope to toggle back and
+        # forth repeatedly between the same two deadlines, and end up with
+        # lots of stale entries that *look* like they're still active, because
+        # their deadline is correct, but in fact are redundant. So when
+        # pruning we have to eliminate entries with the wrong deadline, *and*
+        # eliminate duplicates.
+        seen = set()
+        pruned_heap = []
+        for deadline, tiebreaker, cancel_scope in self._heap:
+            if deadline == cancel_scope._registered_deadline:
+                if cancel_scope in seen:
+                    continue
+                seen.add(cancel_scope)
+                pruned_heap.append((deadline, tiebreaker, cancel_scope))
+        # See test_cancel_scope_deadline_duplicates for a test that exercises
+        # this assert:
+        assert len(pruned_heap) == self._active
+        heapify(pruned_heap)
+        self._heap = pruned_heap
+
+    def expire(self, now):
+        did_something = False
+        while self._heap and self._heap[0][0] <= now:
+            deadline, _, cancel_scope = heappop(self._heap)
+            if deadline == cancel_scope._registered_deadline:
+                did_something = True
+                # This implicitly calls self.remove(), so we don't need to
+                # decrement _active here
+                cancel_scope.cancel()
+        # If we've accumulated too many stale entries, then prune the heap to
+        # keep it under control. (We only do this occasionally in a batch, to
+        # keep the amortized cost down)
+        if len(self._heap) > self._active * 2 + DEADLINE_HEAP_MIN_PRUNE_THRESHOLD:
+            self._prune()
+        return did_something
 
 
 @attr.s(eq=False, slots=True)
@@ -247,7 +333,8 @@ class CancelStatus:
     @property
     def parent_cancellation_is_visible_to_us(self):
         return (
-            self._parent is not None and not self._scope.shield
+            self._parent is not None
+            and not self._scope.shield
             and self._parent.effectively_cancelled
         )
 
@@ -368,9 +455,7 @@ class CancelScope(metaclass=Final):
         if current_time() >= self._deadline:
             self.cancel()
         with self._might_change_registered_deadline():
-            self._cancel_status = CancelStatus(
-                scope=self, parent=task._cancel_status
-            )
+            self._cancel_status = CancelStatus(scope=self, parent=task._cancel_status)
             task._activate_cancel_status(self._cancel_status)
         return self
 
@@ -421,8 +506,10 @@ class CancelScope(metaclass=Final):
                 new_exc = RuntimeError(
                     "Cancel scope stack corrupted: attempted to exit {!r} "
                     "in {!r} that's still within its child {!r}\n{}".format(
-                        self, scope_task, scope_task._cancel_status._scope,
-                        MISNESTING_ADVICE
+                        self,
+                        scope_task,
+                        scope_task._cancel_status._scope,
+                        MISNESTING_ADVICE,
                     )
                 )
                 new_exc.__context__ = exc
@@ -431,7 +518,8 @@ class CancelScope(metaclass=Final):
         else:
             scope_task._activate_cancel_status(self._cancel_status.parent)
         if (
-            exc is not None and self._cancel_status.effectively_cancelled
+            exc is not None
+            and self._cancel_status.effectively_cancelled
             and not self._cancel_status.parent_cancellation_is_visible_to_us
         ):
             exc = MultiError.filter(self._exc_filter, exc)
@@ -484,12 +572,10 @@ class CancelScope(metaclass=Final):
             else:
                 state = ", deadline is {:.2f} seconds {}".format(
                     abs(self._deadline - now),
-                    "from now" if self._deadline >= now else "ago"
+                    "from now" if self._deadline >= now else "ago",
                 )
 
-        return "<trio.CancelScope at {:#x}, {}{}>".format(
-            id(self), binding, state
-        )
+        return "<trio.CancelScope at {:#x}, {}{}>".format(id(self), binding, state)
 
     @contextmanager
     @enable_ki_protection
@@ -505,10 +591,16 @@ class CancelScope(metaclass=Final):
             if old != new:
                 self._registered_deadline = new
                 runner = GLOBAL_RUN_CONTEXT.runner
+                if runner.is_guest:
+                    old_next_deadline = runner.deadlines.next_deadline()
                 if old != inf:
-                    del runner.deadlines[old, id(self)]
+                    runner.deadlines.remove(old, self)
                 if new != inf:
-                    runner.deadlines[new, id(self)] = self
+                    runner.deadlines.add(new, self)
+                if runner.is_guest:
+                    new_next_deadline = runner.deadlines.next_deadline()
+                    if old_next_deadline != new_next_deadline:
+                        runner.force_guest_tick_asap()
 
     @property
     def deadline(self):
@@ -565,7 +657,7 @@ class CancelScope(metaclass=Final):
         """
         return self._shield
 
-    @shield.setter
+    @shield.setter  # type: ignore  # "decorated property not supported"
     @enable_ki_protection
     def shield(self, new_value):
         if not isinstance(new_value, bool):
@@ -637,9 +729,7 @@ class _TaskStatus:
 
     def started(self, value=None):
         if self._called_started:
-            raise RuntimeError(
-                "called 'started' twice on the same task status"
-            )
+            raise RuntimeError("called 'started' twice on the same task status")
         self._called_started = True
         self._value = value
 
@@ -659,6 +749,7 @@ class _TaskStatus:
         self._old_nursery._children = set()
         for task in tasks:
             task._parent_nursery = self._new_nursery
+            task._eventual_parent_nursery = None
             self._new_nursery._children.add(task)
 
         # Move all children of the old nursery's cancel status object
@@ -698,6 +789,7 @@ class NurseryManager:
     and StopAsyncIteration.
 
     """
+
     @enable_ki_protection
     async def __aenter__(self):
         self._scope = CancelScope()
@@ -767,6 +859,7 @@ class Nursery(metaclass=NoPublicConstructor):
             other things, e.g. if you want to explicitly cancel all children
             in response to some external event.
     """
+
     def __init__(self, parent_task, cancel_scope):
         self._parent_task = parent_task
         parent_task._child_nurseries.append(self)
@@ -803,9 +896,7 @@ class Nursery(metaclass=NoPublicConstructor):
         self.cancel_scope.cancel()
 
     def _check_nursery_closed(self):
-        if not any(
-            [self._nested_child_running, self._children, self._pending_starts]
-        ):
+        if not any([self._nested_child_running, self._children, self._pending_starts]):
             self._closed = True
             if self._parent_waiting_in_aexit:
                 self._parent_waiting_in_aexit = False
@@ -813,7 +904,7 @@ class Nursery(metaclass=NoPublicConstructor):
 
     def _child_finished(self, task, outcome):
         self._children.remove(task)
-        if type(outcome) is Error:
+        if isinstance(outcome, Error):
             self._add_exc(outcome.error)
         self._check_nursery_closed()
 
@@ -862,7 +953,7 @@ class Nursery(metaclass=NoPublicConstructor):
         If you want to run a function and immediately wait for its result,
         then you don't need a nursery; just use ``await async_fn(*args)``.
         If you want to wait for the task to initialize itself before
-        continuing, see :meth:`start()`.
+        continuing, see :meth:`start`.
 
         It's possible to pass a nursery object into another task, which
         allows that task to start new child tasks in the first task's
@@ -884,9 +975,6 @@ class Nursery(metaclass=NoPublicConstructor):
                   original function as the ``name=`` to make
                   debugging easier.
 
-        Returns:
-            True if successful, False otherwise.
-
         Raises:
             RuntimeError: If this nursery is no longer open
                           (i.e. its ``async with`` block has
@@ -895,7 +983,7 @@ class Nursery(metaclass=NoPublicConstructor):
         GLOBAL_RUN_CONTEXT.runner.spawn_impl(async_fn, args, self, name)
 
     async def start(self, async_fn, *args, name=None):
-        r""" Creates and initalizes a child task.
+        r"""Creates and initalizes a child task.
 
         Like :meth:`start_soon`, but blocks until the new task has
         finished initializing itself, and optionally returns some
@@ -907,7 +995,7 @@ class Nursery(metaclass=NoPublicConstructor):
 
         The conventional way to define ``async_fn`` is like::
 
-            async def async_fn(arg1, arg2, \*, task_status=trio.TASK_STATUS_IGNORED):
+            async def async_fn(arg1, arg2, *, task_status=trio.TASK_STATUS_IGNORED):
                 ...
                 task_status.started()
                 ...
@@ -942,16 +1030,17 @@ class Nursery(metaclass=NoPublicConstructor):
             async with open_nursery() as old_nursery:
                 task_status = _TaskStatus(old_nursery, self)
                 thunk = functools.partial(async_fn, task_status=task_status)
-                old_nursery.start_soon(thunk, *args, name=name)
+                task = GLOBAL_RUN_CONTEXT.runner.spawn_impl(
+                    thunk, args, old_nursery, name
+                )
+                task._eventual_parent_nursery = self
                 # Wait for either _TaskStatus.started or an exception to
                 # cancel this nursery:
             # If we get here, then the child either got reparented or exited
             # normally. The complicated logic is all in _TaskStatus.started().
             # (Any exceptions propagate directly out of the above.)
             if not task_status._called_started:
-                raise RuntimeError(
-                    "child exited without calling task_status.started()"
-                )
+                raise RuntimeError("child exited without calling task_status.started()")
             return task_status._value
         finally:
             self._pending_starts -= 1
@@ -994,6 +1083,7 @@ class Task(metaclass=NoPublicConstructor):
 
     # For introspection and nursery.start()
     _child_nurseries = attr.ib(factory=list)
+    _eventual_parent_nursery = attr.ib(default=None)
 
     # these are counts of how many cancel/schedule points this task has
     # executed, for assert{_no,}_checkpoints
@@ -1002,7 +1092,7 @@ class Task(metaclass=NoPublicConstructor):
     _schedule_points = attr.ib(default=0)
 
     def __repr__(self):
-        return ("<Task {!r} at {:#x}>".format(self.name, id(self)))
+        return "<Task {!r} at {:#x}>".format(self.name, id(self))
 
     @property
     def parent_nursery(self):
@@ -1014,6 +1104,18 @@ class Task(metaclass=NoPublicConstructor):
 
         """
         return self._parent_nursery
+
+    @property
+    def eventual_parent_nursery(self):
+        """The nursery this task will be inside after it calls
+        ``task_status.started()``.
+
+        If this task has already called ``started()``, or if it was not
+        spawned using `nursery.start() <trio.Nursery.start>`, then
+        its `eventual_parent_nursery` is ``None``.
+
+        """
+        return self._eventual_parent_nursery
 
     @property
     def child_nurseries(self):
@@ -1082,7 +1184,13 @@ class Task(metaclass=NoPublicConstructor):
 # The central Runner object
 ################################################################
 
-GLOBAL_RUN_CONTEXT = threading.local()
+
+class RunContext(threading.local):
+    runner: "Runner"
+    task: Task
+
+
+GLOBAL_RUN_CONTEXT = RunContext()
 
 
 @attr.s(frozen=True)
@@ -1094,11 +1202,76 @@ class _RunStatistics:
     run_sync_soon_queue_size = attr.ib()
 
 
-@attr.s(eq=False, hash=False)
+# This holds all the state that gets trampolined back and forth between
+# callbacks when we're running in guest mode.
+#
+# It has to be a separate object from Runner, and Runner *cannot* hold
+# references to it (directly or indirectly)!
+#
+# The idea is that we want a chance to detect if our host loop quits and stops
+# driving us forward. We detect that by unrolled_run_gen being garbage
+# collected, and hitting its 'except GeneratorExit:' block. So this only
+# happens if unrolled_run_gen is GCed.
+#
+# The Runner state is referenced from the global GLOBAL_RUN_CONTEXT. The only
+# way it gets *un*referenced is by unrolled_run_gen completing, e.g. by being
+# GCed. But if Runner has a direct or indirect reference to it, and the host
+# loop has abandoned it, then this will never happen!
+#
+# So this object can reference Runner, but Runner can't reference it. The only
+# references to it are the "in flight" callback chain on the host loop /
+# worker thread.
+@attr.s(eq=False, hash=False, slots=True)
+class GuestState:
+    runner = attr.ib()
+    run_sync_soon_threadsafe = attr.ib()
+    run_sync_soon_not_threadsafe = attr.ib()
+    done_callback = attr.ib()
+    unrolled_run_gen = attr.ib()
+    _value_factory: Callable[[], Value] = lambda: Value(None)
+    unrolled_run_next_send = attr.ib(factory=_value_factory, type=Outcome)
+
+    def guest_tick(self):
+        try:
+            timeout = self.unrolled_run_next_send.send(self.unrolled_run_gen)
+        except StopIteration:
+            self.done_callback(self.runner.main_task_outcome)
+            return
+        except TrioInternalError as exc:
+            self.done_callback(Error(exc))
+            return
+
+        # Optimization: try to skip going into the thread if we can avoid it
+        events_outcome = capture(self.runner.io_manager.get_events, 0)
+        if timeout <= 0 or isinstance(events_outcome, Error) or events_outcome.value:
+            # No need to go into the thread
+            self.unrolled_run_next_send = events_outcome
+            self.runner.guest_tick_scheduled = True
+            self.run_sync_soon_not_threadsafe(self.guest_tick)
+        else:
+            # Need to go into the thread and call get_events() there
+            self.runner.guest_tick_scheduled = False
+
+            def get_events():
+                return self.runner.io_manager.get_events(timeout)
+
+            def deliver(events_outcome):
+                def in_main_thread():
+                    self.unrolled_run_next_send = events_outcome
+                    self.runner.guest_tick_scheduled = True
+                    self.guest_tick()
+
+                self.run_sync_soon_threadsafe(in_main_thread)
+
+            start_thread_soon(get_events, deliver)
+
+
+@attr.s(eq=False, hash=False, slots=True)
 class Runner:
     clock = attr.ib()
-    instruments = attr.ib()
+    instruments: Instruments = attr.ib()
     io_manager = attr.ib()
+    ki_manager = attr.ib()
 
     # Run-local values, see _local.py
     _locals = attr.ib(factory=dict)
@@ -1106,10 +1279,7 @@ class Runner:
     runq = attr.ib(factory=deque)
     tasks = attr.ib(factory=set)
 
-    # {(deadline, id(CancelScope)): CancelScope}
-    # only contains scopes with non-infinite deadlines that are currently
-    # attached to at least one task
-    deadlines = attr.ib(factory=SortedDict)
+    deadlines = attr.ib(factory=Deadlines)
 
     init_task = attr.ib(default=None)
     system_nursery = attr.ib(default=None)
@@ -1119,12 +1289,29 @@ class Runner:
 
     entry_queue = attr.ib(factory=EntryQueue)
     trio_token = attr.ib(default=None)
+    asyncgens = attr.ib(factory=AsyncGenerators)
+
+    # If everything goes idle for this long, we call clock._autojump()
+    clock_autojump_threshold = attr.ib(default=inf)
+
+    # Guest mode stuff
+    is_guest = attr.ib(default=False)
+    guest_tick_scheduled = attr.ib(default=False)
+
+    def force_guest_tick_asap(self):
+        if self.guest_tick_scheduled:
+            return
+        self.guest_tick_scheduled = True
+        self.io_manager.force_wakeup()
 
     def close(self):
         self.io_manager.close()
         self.entry_queue.close()
-        if self.instruments:
-            self.instrument("after_run")
+        self.asyncgens.close()
+        if "after_run" in self.instruments:
+            self.instruments.call("after_run")
+        # This is where KI protection gets disabled, so we do it last
+        self.ki_manager.close()
 
     @_public
     def current_statistics(self):
@@ -1150,11 +1337,7 @@ class Runner:
           other attributes vary between backends.
 
         """
-        if self.deadlines:
-            next_deadline, _ = self.deadlines.keys()[0]
-            seconds_to_next_deadline = next_deadline - self.current_time()
-        else:
-            seconds_to_next_deadline = float("inf")
+        seconds_to_next_deadline = self.deadlines.next_deadline() - self.current_time()
         return _RunStatistics(
             tasks_living=len(self.tasks),
             tasks_runnable=len(self.runq),
@@ -1178,9 +1361,7 @@ class Runner:
 
     @_public
     def current_clock(self):
-        """Returns the current :class:`~trio.abc.Clock`.
-
-        """
+        """Returns the current :class:`~trio.abc.Clock`."""
         return self.clock
 
     @_public
@@ -1224,9 +1405,11 @@ class Runner:
         task._next_send = next_send
         task._abort_func = None
         task.custom_sleep_data = None
+        if not self.runq and self.is_guest:
+            self.force_guest_tick_asap()
         self.runq.append(task)
-        if self.instruments:
-            self.instrument("task_scheduled", task)
+        if "task_scheduled" in self.instruments:
+            self.instruments.call("task_scheduled", task)
 
     def spawn_impl(self, async_fn, args, nursery, name, *, system_task=False):
 
@@ -1269,19 +1452,13 @@ class Runner:
                 return await orig_coro
 
             coro = python_wrapper(coro)
-        coro.cr_frame.f_locals.setdefault(
-            LOCALS_KEY_KI_PROTECTION_ENABLED, system_task
-        )
+        coro.cr_frame.f_locals.setdefault(LOCALS_KEY_KI_PROTECTION_ENABLED, system_task)
 
         ######
         # Set up the Task object
         ######
         task = Task._create(
-            coro=coro,
-            parent_nursery=nursery,
-            runner=self,
-            name=name,
-            context=context,
+            coro=coro, parent_nursery=nursery, runner=self, name=name, context=context
         )
 
         self.tasks.add(task)
@@ -1289,8 +1466,8 @@ class Runner:
             nursery._children.add(task)
             task._activate_cancel_status(nursery._cancel_status)
 
-        if self.instruments:
-            self.instrument("task_spawned", task)
+        if "task_spawned" in self.instruments:
+            self.instruments.call("task_spawned", task)
         # Special case: normally next_send should be an Outcome, but for the
         # very first send we have to send a literal unboxed None.
         self.reschedule(task, None)
@@ -1322,11 +1499,7 @@ class Runner:
 
         task._activate_cancel_status(None)
         self.tasks.remove(task)
-        if task is self.main_task:
-            self.main_task_outcome = outcome
-            self.system_nursery.cancel_scope.cancel()
-            self.system_nursery._child_finished(task, Value(None))
-        elif task is self.init_task:
+        if task is self.init_task:
             # If the init task crashed, then something is very wrong and we
             # let the error propagate. (It'll eventually be wrapped in a
             # TrioInternalError.)
@@ -1336,10 +1509,13 @@ class Runner:
             if self.tasks:  # pragma: no cover
                 raise TrioInternalError
         else:
+            if task is self.main_task:
+                self.main_task_outcome = outcome
+                outcome = Value(None)
             task._parent_nursery._child_finished(task, outcome)
 
-        if self.instruments:
-            self.instrument("task_exited", task)
+        if "task_exited" in self.instruments:
+            self.instruments.call("task_exited", task)
 
     ################
     # System tasks and init
@@ -1390,16 +1566,37 @@ class Runner:
         )
 
     async def init(self, async_fn, args):
-        async with open_nursery() as system_nursery:
-            self.system_nursery = system_nursery
-            try:
-                self.main_task = self.spawn_impl(
-                    async_fn, args, system_nursery, None
-                )
-            except BaseException as exc:
-                self.main_task_outcome = Error(exc)
-                system_nursery.cancel_scope.cancel()
-            self.entry_queue.spawn()
+        # run_sync_soon task runs here:
+        async with open_nursery() as run_sync_soon_nursery:
+            # All other system tasks run here:
+            async with open_nursery() as self.system_nursery:
+                # Only the main task runs here:
+                async with open_nursery() as main_task_nursery:
+                    try:
+                        self.main_task = self.spawn_impl(
+                            async_fn, args, main_task_nursery, None
+                        )
+                    except BaseException as exc:
+                        self.main_task_outcome = Error(exc)
+                        return
+                    self.spawn_impl(
+                        self.entry_queue.task,
+                        (),
+                        run_sync_soon_nursery,
+                        "<TrioToken.run_sync_soon task>",
+                        system_task=True,
+                    )
+
+                # Main task is done; start shutting down system tasks
+                self.system_nursery.cancel_scope.cancel()
+
+            # System nursery is closed; finalize remaining async generators
+            await self.asyncgens.finalize_remaining(self)
+
+            # There are no more asyncgens, which means no more user-provided
+            # code except possibly run_sync_soon callbacks. It's finally safe
+            # to stop the run_sync_soon task and exit run().
+            run_sync_soon_nursery.cancel_scope.cancel()
 
     ################
     # Outside context problems
@@ -1455,7 +1652,7 @@ class Runner:
     waiting_for_idle = attr.ib(factory=SortedDict)
 
     @_public
-    async def wait_all_tasks_blocked(self, cushion=0.0, tiebreaker=0):
+    async def wait_all_tasks_blocked(self, cushion=0.0, tiebreaker="deprecated"):
         """Block until there are no runnable tasks.
 
         This is useful in testing code when you want to give other tasks a
@@ -1473,9 +1670,7 @@ class Runner:
         then the one with the shortest ``cushion`` is the one woken (and
         this task becoming unblocked resets the timers for the remaining
         tasks). If there are multiple tasks that have exactly the same
-        ``cushion``, then the one with the lowest ``tiebreaker`` value is
-        woken first. And if there are multiple tasks with the same ``cushion``
-        and the same ``tiebreaker``, then all are woken.
+        ``cushion``, then all are woken.
 
         You should also consider :class:`trio.testing.Sequencer`, which
         provides a more explicit way to control execution ordering within a
@@ -1515,6 +1710,16 @@ class Runner:
                          print("FAIL")
 
         """
+        if tiebreaker == "deprecated":
+            tiebreaker = 0
+        else:
+            warn_deprecated(
+                "the 'tiebreaker' argument to wait_all_tasks_blocked",
+                "v0.16.0",
+                issue=1558,
+                instead=None,
+            )
+
         task = current_task()
         key = (cushion, tiebreaker, id(task))
         self.waiting_for_idle[key] = task
@@ -1525,66 +1730,105 @@ class Runner:
 
         await wait_task_rescheduled(abort)
 
-    ################
-    # Instrumentation
-    ################
-
-    def instrument(self, method_name, *args):
-        if not self.instruments:
-            return
-
-        for instrument in list(self.instruments):
-            try:
-                method = getattr(instrument, method_name)
-            except AttributeError:
-                continue
-            try:
-                method(*args)
-            except:
-                self.instruments.remove(instrument)
-                INSTRUMENT_LOGGER.exception(
-                    "Exception raised when calling %r on instrument %r. "
-                    "Instrument has been disabled.", method_name, instrument
-                )
-
-    @_public
-    def add_instrument(self, instrument):
-        """Start instrumenting the current run loop with the given instrument.
-
-        Args:
-          instrument (trio.abc.Instrument): The instrument to activate.
-
-        If ``instrument`` is already active, does nothing.
-
-        """
-        if instrument not in self.instruments:
-            self.instruments.append(instrument)
-
-    @_public
-    def remove_instrument(self, instrument):
-        """Stop instrumenting the current run loop with the given instrument.
-
-        Args:
-          instrument (trio.abc.Instrument): The instrument to de-activate.
-
-        Raises:
-          KeyError: if the instrument is not currently active. This could
-              occur either because you never added it, or because you added it
-              and then it raised an unhandled exception and was automatically
-              deactivated.
-
-        """
-        # We're moving 'instruments' to being a set, so raise KeyError like
-        # set.remove does.
-        try:
-            self.instruments.remove(instrument)
-        except ValueError as exc:
-            raise KeyError(*exc.args)
-
 
 ################################################################
 # run
 ################################################################
+#
+# Trio's core task scheduler and coroutine runner is in 'unrolled_run'. It's
+# called that because it has an unusual feature: it's actually a generator.
+# Whenever it needs to fetch IO events from the OS, it yields, and waits for
+# its caller to send the IO events back in. So the loop is "unrolled" into a
+# sequence of generator send() calls.
+#
+# The reason for this unusual design is to support two different modes of
+# operation, where the IO is handled differently.
+#
+# In normal mode using trio.run, the scheduler and IO run in the same thread:
+#
+# Main thread:
+#
+# +---------------------------+
+# | Run tasks                 |
+# | (unrolled_run)            |
+# +---------------------------+
+# | Block waiting for I/O     |
+# | (io_manager.get_events)   |
+# +---------------------------+
+# | Run tasks                 |
+# | (unrolled_run)            |
+# +---------------------------+
+# | Block waiting for I/O     |
+# | (io_manager.get_events)   |
+# +---------------------------+
+# :
+#
+#
+# In guest mode using trio.lowlevel.start_guest_run, the scheduler runs on the
+# main thread as a host loop callback, but blocking for IO gets pushed into a
+# worker thread:
+#
+# Main thread executing host loop:           Trio I/O thread:
+#
+# +---------------------------+
+# | Run Trio tasks            |
+# | (unrolled_run)            |
+# +---------------------------+ --------------+
+#                                             v
+# +---------------------------+              +----------------------------+
+# | Host loop does whatever   |              | Block waiting for Trio I/O |
+# | it wants                  |              | (io_manager.get_events)    |
+# +---------------------------+              +----------------------------+
+#                                             |
+# +---------------------------+ <-------------+
+# | Run Trio tasks            |
+# | (unrolled_run)            |
+# +---------------------------+ --------------+
+#                                             v
+# +---------------------------+              +----------------------------+
+# | Host loop does whatever   |              | Block waiting for Trio I/O |
+# | it wants                  |              | (io_manager.get_events)    |
+# +---------------------------+              +----------------------------+
+# :                                            :
+#
+# Most of Trio's internals don't need to care about this difference. The main
+# complication it creates is that in guest mode, we might need to wake up not
+# just due to OS-reported IO events, but also because of code running on the
+# host loop calling reschedule() or changing task deadlines. Search for
+# 'is_guest' to see the special cases we need to handle this.
+
+
+def setup_runner(clock, instruments, restrict_keyboard_interrupt_to_checkpoints):
+    """Create a Runner object and install it as the GLOBAL_RUN_CONTEXT."""
+    # It wouldn't be *hard* to support nested calls to run(), but I can't
+    # think of a single good reason for it, so let's be conservative for
+    # now:
+    if hasattr(GLOBAL_RUN_CONTEXT, "runner"):
+        raise RuntimeError("Attempted to call run() from inside a run()")
+
+    if clock is None:
+        clock = SystemClock()
+    instruments = Instruments(instruments)
+    io_manager = TheIOManager()
+    system_context = copy_context()
+    system_context.run(current_async_library_cvar.set, "trio")
+    ki_manager = KIManager()
+
+    runner = Runner(
+        clock=clock,
+        instruments=instruments,
+        io_manager=io_manager,
+        system_context=system_context,
+        ki_manager=ki_manager,
+    )
+    runner.asyncgens.install_hooks(runner)
+
+    # This is where KI protection gets enabled, so we want to do it early - in
+    # particular before we start modifying global state like GLOBAL_RUN_CONTEXT
+    ki_manager.install(runner.deliver_ki, restrict_keyboard_interrupt_to_checkpoints)
+
+    GLOBAL_RUN_CONTEXT.runner = runner
+    return runner
 
 
 def run(
@@ -1592,7 +1836,7 @@ def run(
     *args,
     clock=None,
     instruments=(),
-    restrict_keyboard_interrupt_to_checkpoints=False
+    restrict_keyboard_interrupt_to_checkpoints=False,
 ):
     """Run a Trio-flavored async function, and return the result.
 
@@ -1664,64 +1908,108 @@ def run(
 
     __tracebackhide__ = True
 
-    # Do error-checking up front, before we enter the TrioInternalError
-    # try/catch
-    #
-    # It wouldn't be *hard* to support nested calls to run(), but I can't
-    # think of a single good reason for it, so let's be conservative for
-    # now:
-    if hasattr(GLOBAL_RUN_CONTEXT, "runner"):
-        raise RuntimeError("Attempted to call run() from inside a run()")
-
-    if clock is None:
-        clock = SystemClock()
-    instruments = list(instruments)
-    io_manager = TheIOManager()
-    system_context = copy_context()
-    system_context.run(current_async_library_cvar.set, "trio")
-    runner = Runner(
-        clock=clock,
-        instruments=instruments,
-        io_manager=io_manager,
-        system_context=system_context,
+    runner = setup_runner(
+        clock, instruments, restrict_keyboard_interrupt_to_checkpoints
     )
-    GLOBAL_RUN_CONTEXT.runner = runner
-    locals()[LOCALS_KEY_KI_PROTECTION_ENABLED] = True
 
-    # KI handling goes outside the core try/except/finally to avoid a window
-    # where KeyboardInterrupt would be allowed and converted into an
-    # TrioInternalError:
-    try:
-        with ki_manager(
-            runner.deliver_ki, restrict_keyboard_interrupt_to_checkpoints
-        ):
-            try:
-                with closing(runner):
-                    with runner.entry_queue.wakeup.wakeup_on_signals():
-                        # The main reason this is split off into its own
-                        # function is just to get rid of this extra
-                        # indentation.
-                        run_impl(runner, async_fn, args)
-            except TrioInternalError:
-                raise
-            except BaseException as exc:
-                raise TrioInternalError(
-                    "internal error in Trio - please file a bug!"
-                ) from exc
-            finally:
-                GLOBAL_RUN_CONTEXT.__dict__.clear()
-            # Inlined copy of runner.main_task_outcome.unwrap() to avoid
-            # cluttering every single Trio traceback with an extra frame.
-            if type(runner.main_task_outcome) is Value:
-                return runner.main_task_outcome.value
-            else:
-                raise runner.main_task_outcome.error
-    finally:
-        # To guarantee that we never swallow a KeyboardInterrupt, we have to
-        # check for pending ones once more after leaving the context manager:
-        if runner.ki_pending:
-            # Implicitly chains with any exception from outcome.unwrap():
-            raise KeyboardInterrupt
+    gen = unrolled_run(runner, async_fn, args)
+    next_send = None
+    while True:
+        try:
+            timeout = gen.send(next_send)
+        except StopIteration:
+            break
+        next_send = runner.io_manager.get_events(timeout)
+    # Inlined copy of runner.main_task_outcome.unwrap() to avoid
+    # cluttering every single Trio traceback with an extra frame.
+    if isinstance(runner.main_task_outcome, Value):
+        return runner.main_task_outcome.value
+    else:
+        raise runner.main_task_outcome.error
+
+
+def start_guest_run(
+    async_fn,
+    *args,
+    run_sync_soon_threadsafe,
+    done_callback,
+    run_sync_soon_not_threadsafe=None,
+    host_uses_signal_set_wakeup_fd=False,
+    clock=None,
+    instruments=(),
+    restrict_keyboard_interrupt_to_checkpoints=False,
+):
+    """Start a "guest" run of Trio on top of some other "host" event loop.
+
+    Each host loop can only have one guest run at a time.
+
+    You should always let the Trio run finish before stopping the host loop;
+    if not, it may leave Trio's internal data structures in an inconsistent
+    state. You might be able to get away with it if you immediately exit the
+    program, but it's safest not to go there in the first place.
+
+    Generally, the best way to do this is wrap this in a function that starts
+    the host loop and then immediately starts the guest run, and then shuts
+    down the host when the guest run completes.
+
+    Args:
+
+      run_sync_soon_threadsafe: An arbitrary callable, which will be passed a
+         function as its sole argument::
+
+            def my_run_sync_soon_threadsafe(fn):
+                ...
+
+         This callable should schedule ``fn()`` to be run by the host on its
+         next pass through its loop. **Must support being called from
+         arbitrary threads.**
+
+      done_callback: An arbitrary callable::
+
+            def my_done_callback(run_outcome):
+                ...
+
+         When the Trio run has finished, Trio will invoke this callback to let
+         you know. The argument is an `outcome.Outcome`, reporting what would
+         have been returned or raised by `trio.run`. This function can do
+         anything you want, but commonly you'll want it to shut down the
+         host loop, unwrap the outcome, etc.
+
+      run_sync_soon_not_threadsafe: Like ``run_sync_soon_threadsafe``, but
+         will only be called from inside the host loop's main thread.
+         Optional, but if your host loop allows you to implement this more
+         efficiently than ``run_sync_soon_threadsafe`` then passing it will
+         make things a bit faster.
+
+      host_uses_signal_set_wakeup_fd (bool): Pass `True` if your host loop
+         uses `signal.set_wakeup_fd`, and `False` otherwise. For more details,
+         see :ref:`guest-run-implementation`.
+
+    For the meaning of other arguments, see `trio.run`.
+
+    """
+    runner = setup_runner(
+        clock, instruments, restrict_keyboard_interrupt_to_checkpoints
+    )
+    runner.is_guest = True
+    runner.guest_tick_scheduled = True
+
+    if run_sync_soon_not_threadsafe is None:
+        run_sync_soon_not_threadsafe = run_sync_soon_threadsafe
+
+    guest_state = GuestState(
+        runner=runner,
+        run_sync_soon_threadsafe=run_sync_soon_threadsafe,
+        run_sync_soon_not_threadsafe=run_sync_soon_not_threadsafe,
+        done_callback=done_callback,
+        unrolled_run_gen=unrolled_run(
+            runner,
+            async_fn,
+            args,
+            host_uses_signal_set_wakeup_fd=host_uses_signal_set_wakeup_fd,
+        ),
+    )
+    run_sync_soon_not_threadsafe(guest_state.guest_tick)
 
 
 # 24 hours is arbitrary, but it avoids issues like people setting timeouts of
@@ -1729,161 +2017,224 @@ def run(
 _MAX_TIMEOUT = 24 * 60 * 60
 
 
-def run_impl(runner, async_fn, args):
+# Weird quirk: this is written as a generator in order to support "guest
+# mode", where our core event loop gets unrolled into a series of callbacks on
+# the host loop. If you're doing a regular trio.run then this gets run
+# straight through.
+def unrolled_run(runner, async_fn, args, host_uses_signal_set_wakeup_fd=False):
+    locals()[LOCALS_KEY_KI_PROTECTION_ENABLED] = True
     __tracebackhide__ = True
 
-    if runner.instruments:
-        runner.instrument("before_run")
-    runner.clock.start_clock()
-    runner.init_task = runner.spawn_impl(
-        runner.init,
-        (async_fn, args),
-        None,
-        "<init>",
-        system_task=True,
-    )
+    try:
+        if not host_uses_signal_set_wakeup_fd:
+            runner.entry_queue.wakeup.wakeup_on_signals()
 
-    # You know how people talk about "event loops"? This 'while' loop right
-    # here is our event loop:
-    while runner.tasks:
-        if runner.runq:
-            timeout = 0
-        elif runner.deadlines:
-            deadline, _ = runner.deadlines.keys()[0]
-            timeout = runner.clock.deadline_to_sleep_time(deadline)
-        else:
-            timeout = _MAX_TIMEOUT
-        timeout = min(max(0, timeout), _MAX_TIMEOUT)
+        if "before_run" in runner.instruments:
+            runner.instruments.call("before_run")
+        runner.clock.start_clock()
+        runner.init_task = runner.spawn_impl(
+            runner.init, (async_fn, args), None, "<init>", system_task=True
+        )
 
-        idle_primed = False
-        if runner.waiting_for_idle:
-            cushion, tiebreaker, _ = runner.waiting_for_idle.keys()[0]
-            if cushion < timeout:
-                timeout = cushion
-                idle_primed = True
-
-        if runner.instruments:
-            runner.instrument("before_io_wait", timeout)
-
-        runner.io_manager.handle_io(timeout)
-
-        if runner.instruments:
-            runner.instrument("after_io_wait", timeout)
-
-        # Process cancellations due to deadline expiry
-        now = runner.clock.current_time()
-        while runner.deadlines:
-            (deadline, _), cancel_scope = runner.deadlines.peekitem(0)
-            if deadline <= now:
-                # This removes the given scope from runner.deadlines:
-                cancel_scope.cancel()
-                idle_primed = False
+        # You know how people talk about "event loops"? This 'while' loop right
+        # here is our event loop:
+        while runner.tasks:
+            if runner.runq:
+                timeout = 0
             else:
-                break
+                deadline = runner.deadlines.next_deadline()
+                timeout = runner.clock.deadline_to_sleep_time(deadline)
+            timeout = min(max(0, timeout), _MAX_TIMEOUT)
 
-        if not runner.runq and idle_primed:
-            while runner.waiting_for_idle:
-                key, task = runner.waiting_for_idle.peekitem(0)
-                if key[:2] == (cushion, tiebreaker):
-                    del runner.waiting_for_idle[key]
-                    runner.reschedule(task)
+            idle_primed = None
+            if runner.waiting_for_idle:
+                cushion, tiebreaker, _ = runner.waiting_for_idle.keys()[0]
+                if cushion < timeout:
+                    timeout = cushion
+                    idle_primed = IdlePrimedTypes.WAITING_FOR_IDLE
+            # We use 'elif' here because if there are tasks in
+            # wait_all_tasks_blocked, then those tasks will wake up without
+            # jumping the clock, so we don't need to autojump.
+            elif runner.clock_autojump_threshold < timeout:
+                timeout = runner.clock_autojump_threshold
+                idle_primed = IdlePrimedTypes.AUTOJUMP_CLOCK
+
+            if "before_io_wait" in runner.instruments:
+                runner.instruments.call("before_io_wait", timeout)
+
+            # Driver will call io_manager.get_events(timeout) and pass it back
+            # in throuh the yield
+            events = yield timeout
+            runner.io_manager.process_events(events)
+
+            if "after_io_wait" in runner.instruments:
+                runner.instruments.call("after_io_wait", timeout)
+
+            # Process cancellations due to deadline expiry
+            now = runner.clock.current_time()
+            if runner.deadlines.expire(now):
+                idle_primed = None
+
+            # idle_primed != None means: if the IO wait hit the timeout, and
+            # still nothing is happening, then we should start waking up
+            # wait_all_tasks_blocked tasks or autojump the clock. But there
+            # are some subtleties in defining "nothing is happening".
+            #
+            # 'not runner.runq' means that no tasks are currently runnable.
+            # 'not events' means that the last IO wait call hit its full
+            # timeout. These are very similar, and if idle_primed != None and
+            # we're running in regular mode then they always go together. But,
+            # in *guest* mode, they can happen independently, even when
+            # idle_primed=True:
+            #
+            # - runner.runq=empty and events=True: the host loop adjusted a
+            #   deadline and that forced an IO wakeup before the timeout expired,
+            #   even though no actual tasks were scheduled.
+            #
+            # - runner.runq=nonempty and events=False: the IO wait hit its
+            #   timeout, but then some code in the host thread rescheduled a task
+            #   before we got here.
+            #
+            # So we need to check both.
+            if idle_primed is not None and not runner.runq and not events:
+                if idle_primed is IdlePrimedTypes.WAITING_FOR_IDLE:
+                    while runner.waiting_for_idle:
+                        key, task = runner.waiting_for_idle.peekitem(0)
+                        if key[:2] == (cushion, tiebreaker):
+                            del runner.waiting_for_idle[key]
+                            runner.reschedule(task)
+                        else:
+                            break
                 else:
-                    break
+                    assert idle_primed is IdlePrimedTypes.AUTOJUMP_CLOCK
+                    runner.clock._autojump()
 
-        # Process all runnable tasks, but only the ones that are already
-        # runnable now. Anything that becomes runnable during this cycle needs
-        # to wait until the next pass. This avoids various starvation issues
-        # by ensuring that there's never an unbounded delay between successive
-        # checks for I/O.
-        #
-        # Also, we randomize the order of each batch to avoid assumptions
-        # about scheduling order sneaking in. In the long run, I suspect we'll
-        # either (a) use strict FIFO ordering and document that for
-        # predictability/determinism, or (b) implement a more sophisticated
-        # scheduler (e.g. some variant of fair queueing), for better behavior
-        # under load. For now, this is the worst of both worlds - but it keeps
-        # our options open. (If we do decide to go all in on deterministic
-        # scheduling, then there are other things that will probably need to
-        # change too, like the deadlines tie-breaker and the non-deterministic
-        # ordering of task._notify_queues.)
-        batch = list(runner.runq)
-        if _ALLOW_DETERMINISTIC_SCHEDULING:
-            # We're running under Hypothesis, and pytest-trio has patched this
-            # in to make the scheduler deterministic and avoid flaky tests.
-            # It's not worth the (small) performance cost in normal operation,
-            # since we'll shuffle the list and _r is only seeded for tests.
-            batch.sort(key=lambda t: t._counter)
-        runner.runq.clear()
-        _r.shuffle(batch)
-        while batch:
-            task = batch.pop()
-            GLOBAL_RUN_CONTEXT.task = task
-
-            if runner.instruments:
-                runner.instrument("before_task_step", task)
-
-            next_send_fn = task._next_send_fn
-            next_send = task._next_send
-            task._next_send_fn = task._next_send = None
-            final_outcome = None
-            try:
-                # We used to unwrap the Outcome object here and send/throw its
-                # contents in directly, but it turns out that .throw() is
-                # buggy, at least on CPython 3.6:
-                #   https://bugs.python.org/issue29587
-                #   https://bugs.python.org/issue29590
-                # So now we send in the Outcome object and unwrap it on the
-                # other side.
-                msg = task.context.run(next_send_fn, next_send)
-            except StopIteration as stop_iteration:
-                final_outcome = Value(stop_iteration.value)
-            except BaseException as task_exc:
-                # Store for later, removing uninteresting top frames: 1 frame
-                # we always remove, because it's this function catching it,
-                # and then in addition we remove however many more Context.run
-                # adds.
-                tb = task_exc.__traceback__.tb_next
-                for _ in range(CONTEXT_RUN_TB_FRAMES):
-                    tb = tb.tb_next
-                final_outcome = Error(task_exc.with_traceback(tb))
-
-            if final_outcome is not None:
-                # We can't call this directly inside the except: blocks above,
-                # because then the exceptions end up attaching themselves to
-                # other exceptions as __context__ in unwanted ways.
-                runner.task_exited(task, final_outcome)
+            # Process all runnable tasks, but only the ones that are already
+            # runnable now. Anything that becomes runnable during this cycle
+            # needs to wait until the next pass. This avoids various
+            # starvation issues by ensuring that there's never an unbounded
+            # delay between successive checks for I/O.
+            #
+            # Also, we randomize the order of each batch to avoid assumptions
+            # about scheduling order sneaking in. In the long run, I suspect
+            # we'll either (a) use strict FIFO ordering and document that for
+            # predictability/determinism, or (b) implement a more
+            # sophisticated scheduler (e.g. some variant of fair queueing),
+            # for better behavior under load. For now, this is the worst of
+            # both worlds - but it keeps our options open. (If we do decide to
+            # go all in on deterministic scheduling, then there are other
+            # things that will probably need to change too, like the deadlines
+            # tie-breaker and the non-deterministic ordering of
+            # task._notify_queues.)
+            batch = list(runner.runq)
+            runner.runq.clear()
+            if _ALLOW_DETERMINISTIC_SCHEDULING:
+                # We're running under Hypothesis, and pytest-trio has patched
+                # this in to make the scheduler deterministic and avoid flaky
+                # tests. It's not worth the (small) performance cost in normal
+                # operation, since we'll shuffle the list and _r is only
+                # seeded for tests.
+                batch.sort(key=lambda t: t._counter)
+                _r.shuffle(batch)
             else:
-                task._schedule_points += 1
-                if msg is CancelShieldedCheckpoint:
-                    runner.reschedule(task)
-                elif type(msg) is WaitTaskRescheduled:
-                    task._cancel_points += 1
-                    task._abort_func = msg.abort_func
-                    # KI is "outside" all cancel scopes, so check for it
-                    # before checking for regular cancellation:
-                    if runner.ki_pending and task is runner.main_task:
-                        task._attempt_delivery_of_pending_ki()
-                    task._attempt_delivery_of_any_pending_cancel()
-                elif type(msg) is PermanentlyDetachCoroutineObject:
-                    # Pretend the task just exited with the given outcome
-                    runner.task_exited(task, msg.final_outcome)
-                else:
-                    exc = TypeError(
-                        "trio.run received unrecognized yield message {!r}. "
-                        "Are you trying to use a library written for some "
-                        "other framework like asyncio? That won't work "
-                        "without some kind of compatibility shim.".format(msg)
-                    )
-                    # The foreign library probably doesn't adhere to our
-                    # protocol of unwrapping whatever outcome gets sent in.
-                    # Instead, we'll arrange to throw `exc` in directly,
-                    # which works for at least asyncio and curio.
-                    runner.reschedule(task, exc)
-                    task._next_send_fn = task.coro.throw
+                # 50% chance of reversing the batch, this way each task
+                # can appear before/after any other task.
+                if _r.random() < 0.5:
+                    batch.reverse()
+            while batch:
+                task = batch.pop()
+                GLOBAL_RUN_CONTEXT.task = task
 
-            if runner.instruments:
-                runner.instrument("after_task_step", task)
-            del GLOBAL_RUN_CONTEXT.task
+                if "before_task_step" in runner.instruments:
+                    runner.instruments.call("before_task_step", task)
+
+                next_send_fn = task._next_send_fn
+                next_send = task._next_send
+                task._next_send_fn = task._next_send = None
+                final_outcome = None
+                try:
+                    # We used to unwrap the Outcome object here and send/throw
+                    # its contents in directly, but it turns out that .throw()
+                    # is buggy, at least on CPython 3.6:
+                    #   https://bugs.python.org/issue29587
+                    #   https://bugs.python.org/issue29590
+                    # So now we send in the Outcome object and unwrap it on the
+                    # other side.
+                    msg = task.context.run(next_send_fn, next_send)
+                except StopIteration as stop_iteration:
+                    final_outcome = Value(stop_iteration.value)
+                except BaseException as task_exc:
+                    # Store for later, removing uninteresting top frames: 1
+                    # frame we always remove, because it's this function
+                    # catching it, and then in addition we remove however many
+                    # more Context.run adds.
+                    tb = task_exc.__traceback__.tb_next
+                    for _ in range(CONTEXT_RUN_TB_FRAMES):
+                        tb = tb.tb_next
+                    final_outcome = Error(task_exc.with_traceback(tb))
+
+                if final_outcome is not None:
+                    # We can't call this directly inside the except: blocks
+                    # above, because then the exceptions end up attaching
+                    # themselves to other exceptions as __context__ in
+                    # unwanted ways.
+                    runner.task_exited(task, final_outcome)
+                else:
+                    task._schedule_points += 1
+                    if msg is CancelShieldedCheckpoint:
+                        runner.reschedule(task)
+                    elif type(msg) is WaitTaskRescheduled:
+                        task._cancel_points += 1
+                        task._abort_func = msg.abort_func
+                        # KI is "outside" all cancel scopes, so check for it
+                        # before checking for regular cancellation:
+                        if runner.ki_pending and task is runner.main_task:
+                            task._attempt_delivery_of_pending_ki()
+                        task._attempt_delivery_of_any_pending_cancel()
+                    elif type(msg) is PermanentlyDetachCoroutineObject:
+                        # Pretend the task just exited with the given outcome
+                        runner.task_exited(task, msg.final_outcome)
+                    else:
+                        exc = TypeError(
+                            "trio.run received unrecognized yield message {!r}. "
+                            "Are you trying to use a library written for some "
+                            "other framework like asyncio? That won't work "
+                            "without some kind of compatibility shim.".format(msg)
+                        )
+                        # The foreign library probably doesn't adhere to our
+                        # protocol of unwrapping whatever outcome gets sent in.
+                        # Instead, we'll arrange to throw `exc` in directly,
+                        # which works for at least asyncio and curio.
+                        runner.reschedule(task, exc)
+                        task._next_send_fn = task.coro.throw
+
+                if "after_task_step" in runner.instruments:
+                    runner.instruments.call("after_task_step", task)
+                del GLOBAL_RUN_CONTEXT.task
+
+    except GeneratorExit:
+        # The run-loop generator has been garbage collected without finishing
+        warnings.warn(
+            RuntimeWarning(
+                "Trio guest run got abandoned without properly finishing... "
+                "weird stuff might happen"
+            )
+        )
+    except TrioInternalError:
+        raise
+    except BaseException as exc:
+        raise TrioInternalError("internal error in Trio - please file a bug!") from exc
+    finally:
+        GLOBAL_RUN_CONTEXT.__dict__.clear()
+        runner.close()
+        # Have to do this after runner.close() has disabled KI protection,
+        # because otherwise there's a race where ki_pending could get set
+        # after we check it.
+        if runner.ki_pending:
+            ki = KeyboardInterrupt()
+            if isinstance(runner.main_task_outcome, Error):
+                ki.__context__ = runner.main_task_outcome.error
+            runner.main_task_outcome = Error(ki)
 
 
 ################################################################
@@ -1957,8 +2308,17 @@ async def checkpoint():
     :func:`checkpoint`.)
 
     """
-    with CancelScope(deadline=-inf):
-        await _core.wait_task_rescheduled(lambda _: _core.Abort.SUCCEEDED)
+    # The scheduler is what checks timeouts and converts them into
+    # cancellations. So by doing the schedule point first, we ensure that the
+    # cancel point has the most up-to-date info.
+    await cancel_shielded_checkpoint()
+    task = current_task()
+    task._cancel_points += 1
+    if task._cancel_status.effectively_cancelled or (
+        task is task._runner.main_task and task._runner.ki_pending
+    ):
+        with CancelScope(deadline=-inf):
+            await _core.wait_task_rescheduled(lambda _: _core.Abort.SUCCEEDED)
 
 
 async def checkpoint_if_cancelled():
@@ -1977,25 +2337,25 @@ async def checkpoint_if_cancelled():
 
     """
     task = current_task()
-    if (
-        task._cancel_status.effectively_cancelled or
-        (task is task._runner.main_task and task._runner.ki_pending)
+    if task._cancel_status.effectively_cancelled or (
+        task is task._runner.main_task and task._runner.ki_pending
     ):
         await _core.checkpoint()
         assert False  # pragma: no cover
     task._cancel_points += 1
 
 
-if os.name == "nt":
+if sys.platform == "win32":
     from ._io_windows import WindowsIOManager as TheIOManager
     from ._generated_io_windows import *
-elif hasattr(select, "epoll"):
+elif sys.platform == "linux" or (not TYPE_CHECKING and hasattr(select, "epoll")):
     from ._io_epoll import EpollIOManager as TheIOManager
     from ._generated_io_epoll import *
-elif hasattr(select, "kqueue"):
+elif TYPE_CHECKING or hasattr(select, "kqueue"):
     from ._io_kqueue import KqueueIOManager as TheIOManager
     from ._generated_io_kqueue import *
 else:  # pragma: no cover
     raise NotImplementedError("unsupported platform")
 
 from ._generated_run import *
+from ._generated_instrumentation import *

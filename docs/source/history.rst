@@ -5,6 +5,130 @@ Release history
 
 .. towncrier release notes start
 
+Trio 0.17.0 (2020-09-15)
+------------------------
+
+Headline features
+~~~~~~~~~~~~~~~~~
+
+- Trio now supports automatic :ref:`async generator finalization
+  <async-generators>`, so more async generators will work even if you
+  don't wrap them in ``async with async_generator.aclosing():``
+  blocks. Please see the documentation for important caveats; in
+  particular, yielding within a nursery or cancel scope remains
+  unsupported. (`#265 <https://github.com/python-trio/trio/issues/265>`__)
+
+
+Features
+~~~~~~~~
+
+- `trio.open_tcp_stream` has a new ``local_address=`` keyword argument
+  that can be used on machines with multiple IP addresses to control
+  which IP is used for the outgoing connection. (`#275 <https://github.com/python-trio/trio/issues/275>`__)
+- If you pass a raw IP address into ``sendto``, it no longer spends any
+  time trying to resolve the hostname. If you're using UDP, this should
+  substantially reduce your per-packet overhead. (`#1595 <https://github.com/python-trio/trio/issues/1595>`__)
+- `trio.lowlevel.checkpoint` is now much faster. (`#1613 <https://github.com/python-trio/trio/issues/1613>`__)
+- We switched to a new, lower-overhead data structure to track upcoming
+  timeouts, which should make your programs faster. (`#1629 <https://github.com/python-trio/trio/issues/1629>`__)
+
+
+Bugfixes
+~~~~~~~~
+
+- On macOS and BSDs, explicitly close our wakeup socketpair when we're
+  done with it. (`#1621 <https://github.com/python-trio/trio/issues/1621>`__)
+- Trio can now be imported when `sys.excepthook` is a `functools.partial` instance, which might occur in a
+  ``pytest-qt`` test function. (`#1630 <https://github.com/python-trio/trio/issues/1630>`__)
+- The thread cache didn't release its reference to the previous job. (`#1638 <https://github.com/python-trio/trio/issues/1638>`__)
+- On Windows, Trio now works around the buggy behavior of certain
+  Layered Service Providers (system components that can intercept
+  network activity) that are built on top of a commercially available
+  library called Komodia Redirector. This benefits users of products
+  such as Astrill VPN and Qustodio parental controls. Previously, Trio
+  would crash on startup when run on a system where such a product was
+  installed. (`#1659 <https://github.com/python-trio/trio/issues/1659>`__)
+
+
+Deprecations and removals
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- Remove ``wait_socket_*``, ``notify_socket_closing``, ``notify_fd_closing``, ``run_sync_in_worker_thread`` and ``current_default_worker_thread_limiter``. They were deprecated in 0.12.0. (`#1596 <https://github.com/python-trio/trio/issues/1596>`__)
+
+
+Miscellaneous internal changes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- When using :ref:`instruments <instrumentation>`, you now only "pay for what you use":
+  if there are no instruments installed that override a particular hook such as
+  :meth:`~trio.abc.Instrument.before_task_step`, then Trio doesn't waste any effort
+  on checking its instruments when the event corresponding to that hook occurs.
+  Previously, installing any instrument would incur all the instrumentation overhead,
+  even for hooks no one was interested in. (`#1340 <https://github.com/python-trio/trio/issues/1340>`__)
+
+
+Trio 0.16.0 (2020-06-10)
+------------------------
+
+Headline features
+~~~~~~~~~~~~~~~~~
+
+- If you want to use Trio, but are stuck with some other event loop like
+  Qt or PyGame, then good news: now you can have both. For details, see:
+  :ref:`guest-mode`. (`#399 <https://github.com/python-trio/trio/issues/399>`__)
+
+
+Features
+~~~~~~~~
+
+- To speed up `trio.to_thread.run_sync`, Trio now caches and re-uses
+  worker threads.
+
+  And in case you have some exotic use case where you need to spawn
+  threads manually, but want to take advantage of Trio's cache, you can
+  do that using the new `trio.lowlevel.start_thread_soon`. (`#6 <https://github.com/python-trio/trio/issues/6>`__)
+- Tasks spawned with `nursery.start() <trio.Nursery.start>` aren't treated as
+  direct children of their nursery until they call ``task_status.started()``.
+  This is visible through the task tree introspection attributes such as
+  `Task.parent_nursery <trio.lowlevel.Task.parent_nursery>`. Sometimes, though,
+  you want to know where the task is going to wind up, even if it hasn't finished
+  initializing yet. To support this, we added a new attribute
+  `Task.eventual_parent_nursery <trio.lowlevel.Task.eventual_parent_nursery>`.
+  For a task spawned with :meth:`~trio.Nursery.start` that hasn't yet called
+  ``started()``, this is the nursery that the task was nominally started in,
+  where it will be running once it finishes starting up. In all other cases,
+  it is ``None``. (`#1558 <https://github.com/python-trio/trio/issues/1558>`__)
+
+
+Bugfixes
+~~~~~~~~
+
+- Added a helpful error message if an async function is passed to `trio.to_thread.run_sync`. (`#1573 <https://github.com/python-trio/trio/issues/1573>`__)
+
+
+Deprecations and removals
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- Remove ``BlockingTrioPortal``: it was deprecated in 0.12.0. (`#1574 <https://github.com/python-trio/trio/issues/1574>`__)
+- The ``tiebreaker`` argument to `trio.testing.wait_all_tasks_blocked`
+  has been deprecated. This is a highly obscure feature that was
+  probably never used by anyone except `trio.testing.MockClock`, and
+  `~trio.testing.MockClock` doesn't need it anymore. (`#1587 <https://github.com/python-trio/trio/issues/1587>`__)
+- Remove the deprecated ``trio.ssl`` and ``trio.subprocess`` modules. (`#1594 <https://github.com/python-trio/trio/issues/1594>`__)
+
+
+Miscellaneous internal changes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- We refactored `trio.testing.MockClock` so that it no longer needs to
+  run an internal task to manage autojumping. This should be mostly
+  invisible to users, but there is one semantic change: the interaction
+  between `trio.testing.wait_all_tasks_blocked` and the autojump clock
+  was fixed. Now, the autojump will always wait until after all
+  `~trio.testing.wait_all_tasks_blocked` calls have finished before
+  firing, instead of it depending on which threshold values you passed. (`#1587 <https://github.com/python-trio/trio/issues/1587>`__)
+
+
 Trio 0.15.1 (2020-05-22)
 ------------------------
 

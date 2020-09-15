@@ -1,7 +1,13 @@
 import math
 from . import _timeouts
 import trio
-from ._core._windows_cffi import ffi, kernel32, ErrorCodes, raise_winerror, _handle
+from ._core._windows_cffi import (
+    ffi,
+    kernel32,
+    ErrorCodes,
+    raise_winerror,
+    _handle,
+)
 
 
 async def WaitForSingleObject(obj):
@@ -45,16 +51,12 @@ async def WaitForSingleObject(obj):
 
 
 def WaitForMultipleObjects_sync(*handles):
-    """Wait for any of the given Windows handles to be signaled.
-
-    """
+    """Wait for any of the given Windows handles to be signaled."""
     n = len(handles)
     handle_arr = ffi.new("HANDLE[{}]".format(n))
     for i in range(n):
         handle_arr[i] = handles[i]
-    timeout = 0xffffffff  # INFINITE
-    retcode = kernel32.WaitForMultipleObjects(
-        n, handle_arr, False, timeout
-    )  # blocking
+    timeout = 0xFFFFFFFF  # INFINITE
+    retcode = kernel32.WaitForMultipleObjects(n, handle_arr, False, timeout)  # blocking
     if retcode == ErrorCodes.WAIT_FAILED:
         raise_winerror()

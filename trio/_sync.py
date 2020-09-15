@@ -41,16 +41,12 @@ class Event(metaclass=SubclassingDeprecatedIn_v0_15_0):
     _flag = attr.ib(default=False, init=False)
 
     def is_set(self):
-        """Return the current value of the internal flag.
-
-        """
+        """Return the current value of the internal flag."""
         return self._flag
 
     @enable_ki_protection
     def set(self):
-        """Set the internal flag value to True, and wake any waiting tasks.
-
-        """
+        """Set the internal flag value to True, and wake any waiting tasks."""
         self._flag = True
         self._lot.unpark_all()
 
@@ -156,6 +152,7 @@ class CapacityLimiter(metaclass=SubclassingDeprecatedIn_v0_15_0):
        just borrowed and then put back.
 
     """
+
     def __init__(self, total_tokens):
         self._lot = ParkingLot()
         self._borrowers = set()
@@ -166,11 +163,8 @@ class CapacityLimiter(metaclass=SubclassingDeprecatedIn_v0_15_0):
         assert self._total_tokens == total_tokens
 
     def __repr__(self):
-        return (
-            "<trio.CapacityLimiter at {:#x}, {}/{} with {} waiting>".format(
-                id(self), len(self._borrowers), self._total_tokens,
-                len(self._lot)
-            )
+        return "<trio.CapacityLimiter at {:#x}, {}/{} with {} waiting>".format(
+            id(self), len(self._borrowers), self._total_tokens, len(self._lot)
         )
 
     @property
@@ -190,9 +184,7 @@ class CapacityLimiter(metaclass=SubclassingDeprecatedIn_v0_15_0):
 
     @total_tokens.setter
     def total_tokens(self, new_total_tokens):
-        if not isinstance(
-            new_total_tokens, int
-        ) and new_total_tokens != math.inf:
+        if not isinstance(new_total_tokens, int) and new_total_tokens != math.inf:
             raise TypeError("total_tokens must be an int or math.inf")
         if new_total_tokens < 1:
             raise ValueError("total_tokens must be >= 1")
@@ -206,16 +198,12 @@ class CapacityLimiter(metaclass=SubclassingDeprecatedIn_v0_15_0):
 
     @property
     def borrowed_tokens(self):
-        """The amount of capacity that's currently in use.
-
-        """
+        """The amount of capacity that's currently in use."""
         return len(self._borrowers)
 
     @property
     def available_tokens(self):
-        """The amount of capacity that's available to use.
-
-        """
+        """The amount of capacity that's available to use."""
         return self.total_tokens - self.borrowed_tokens
 
     @enable_ki_protection
@@ -321,8 +309,7 @@ class CapacityLimiter(metaclass=SubclassingDeprecatedIn_v0_15_0):
         """
         if borrower not in self._borrowers:
             raise RuntimeError(
-                "this borrower isn't holding any of this CapacityLimiter's "
-                "tokens"
+                "this borrower isn't holding any of this CapacityLimiter's tokens"
             )
         self._borrowers.remove(borrower)
         self._wake_waiters()
@@ -381,6 +368,7 @@ class Semaphore(metaclass=SubclassingDeprecatedIn_v0_15_0):
         ``max_value``.
 
     """
+
     def __init__(self, initial_value, *, max_value=None):
         if not isinstance(initial_value, int):
             raise TypeError("initial_value must be an int")
@@ -404,24 +392,18 @@ class Semaphore(metaclass=SubclassingDeprecatedIn_v0_15_0):
             max_value_str = ""
         else:
             max_value_str = ", max_value={}".format(self._max_value)
-        return (
-            "<trio.Semaphore({}{}) at {:#x}>".format(
-                self._value, max_value_str, id(self)
-            )
+        return "<trio.Semaphore({}{}) at {:#x}>".format(
+            self._value, max_value_str, id(self)
         )
 
     @property
     def value(self):
-        """The current value of the semaphore.
-
-        """
+        """The current value of the semaphore."""
         return self._value
 
     @property
     def max_value(self):
-        """The maximum allowed value. May be None to indicate no limit.
-
-        """
+        """The maximum allowed value. May be None to indicate no limit."""
         return self._max_value
 
     @enable_ki_protection
@@ -502,10 +484,8 @@ class _LockImpl:
         else:
             s1 = "unlocked"
             s2 = ""
-        return (
-            "<{} {} object at {:#x}{}>".format(
-                s1, self.__class__.__name__, id(self), s2
-            )
+        return "<{} {} object at {:#x}{}>".format(
+            s1, self.__class__.__name__, id(self), s2
         )
 
     def locked(self):
@@ -537,9 +517,7 @@ class _LockImpl:
 
     @enable_ki_protection
     async def acquire(self):
-        """Acquire the lock, blocking if necessary.
-
-        """
+        """Acquire the lock, blocking if necessary."""
         await trio.lowlevel.checkpoint_if_cancelled()
         try:
             self.acquire_nowait()
@@ -580,9 +558,7 @@ class _LockImpl:
 
         """
         return _LockStatistics(
-            locked=self.locked(),
-            owner=self._owner,
-            tasks_waiting=len(self._lot),
+            locked=self.locked(), owner=self._owner, tasks_waiting=len(self._lot)
         )
 
 
@@ -684,6 +660,7 @@ class Condition(metaclass=SubclassingDeprecatedIn_v0_15_0):
           and used.
 
     """
+
     def __init__(self, lock=None):
         if lock is None:
             lock = Lock()
@@ -711,15 +688,11 @@ class Condition(metaclass=SubclassingDeprecatedIn_v0_15_0):
         return self._lock.acquire_nowait()
 
     async def acquire(self):
-        """Acquire the underlying lock, blocking if necessary.
-
-        """
+        """Acquire the underlying lock, blocking if necessary."""
         await self._lock.acquire()
 
     def release(self):
-        """Release the underlying lock.
-
-        """
+        """Release the underlying lock."""
         self._lock.release()
 
     @enable_ki_protection
@@ -795,6 +768,5 @@ class Condition(metaclass=SubclassingDeprecatedIn_v0_15_0):
 
         """
         return _ConditionStatistics(
-            tasks_waiting=len(self._lot),
-            lock_statistics=self._lock.statistics(),
+            tasks_waiting=len(self._lot), lock_statistics=self._lock.statistics()
         )

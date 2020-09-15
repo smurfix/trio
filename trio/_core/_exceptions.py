@@ -25,9 +25,7 @@ class RunFinishedError(RuntimeError):
 
 
 class WouldBlock(Exception):
-    """Raised by ``X_nowait`` functions if ``X`` would block.
-
-    """
+    """Raised by ``X_nowait`` functions if ``X`` would block."""
 
 
 class Cancelled(BaseException, metaclass=NoPublicConstructor):
@@ -62,6 +60,7 @@ class Cancelled(BaseException, metaclass=NoPublicConstructor):
        everywhere.
 
     """
+
     def __str__(self):
         return "Cancelled"
 

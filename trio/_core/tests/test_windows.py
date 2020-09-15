@@ -4,25 +4,28 @@ from contextlib import contextmanager
 
 import pytest
 
-on_windows = (os.name == "nt")
+on_windows = os.name == "nt"
 # Mark all the tests in this file as being windows-only
 pytestmark = pytest.mark.skipif(not on_windows, reason="windows only")
 
 from .tutil import slow, gc_collect_harder
 from ... import _core, sleep, move_on_after
 from ...testing import wait_all_tasks_blocked
+
 if on_windows:
     from .._windows_cffi import (
-        ffi, kernel32, INVALID_HANDLE_VALUE, raise_winerror, FileFlags
+        ffi,
+        kernel32,
+        INVALID_HANDLE_VALUE,
+        raise_winerror,
+        FileFlags,
     )
 
 
 # The undocumented API that this is testing should be changed to stop using
 # UnboundedQueue (or just removed until we have time to redo it), but until
 # then we filter out the warning.
-@pytest.mark.filterwarnings(
-    "ignore:.*UnboundedQueue:trio.TrioDeprecationWarning"
-)
+@pytest.mark.filterwarnings("ignore:.*UnboundedQueue:trio.TrioDeprecationWarning")
 async def test_completion_key_listen():
     async def post(key):
         iocp = ffi.cast("HANDLE", _core.current_iocp())
@@ -30,9 +33,7 @@ async def test_completion_key_listen():
             print("post", i)
             if i % 3 == 0:
                 await _core.checkpoint()
-            success = kernel32.PostQueuedCompletionStatus(
-                iocp, i, key, ffi.NULL
-            )
+            success = kernel32.PostQueuedCompletionStatus(iocp, i, key, ffi.NULL)
             assert success
 
     with _core.monitor_completion_key() as (key, queue):
@@ -80,9 +81,7 @@ async def test_readinto_overlapped():
 
                 async def read_region(start, end):
                     await _core.readinto_overlapped(
-                        handle,
-                        buffer_view[start:end],
-                        start,
+                        handle, buffer_view[start:end], start
                     )
 
                 _core.register_with_iocp(handle)
@@ -124,10 +123,7 @@ def test_forgot_to_register_with_iocp():
             try:
                 async with _core.open_nursery() as nursery:
                     nursery.start_soon(
-                        _core.readinto_overlapped,
-                        read_handle,
-                        target,
-                        name="xyz"
+                        _core.readinto_overlapped, read_handle, target, name="xyz"
                     )
                     await wait_all_tasks_blocked()
                     nursery.cancel_scope.cancel()
@@ -175,3 +171,47 @@ async def test_too_late_to_cancel():
         # fallback completion that was posted when CancelIoEx failed.
         assert await _core.readinto_overlapped(read_handle, target) == 6
         assert target[:6] == b"test2\n"
+
+
+def test_lsp_that_hooks_select_gives_good_error(monkeypatch):
+    from .._windows_cffi import WSAIoctls, _handle
+    from .. import _io_windows
+
+    def patched_get_underlying(sock, *, which=WSAIoctls.SIO_BASE_HANDLE):
+        if hasattr(sock, "fileno"):  # pragma: no branch
+            sock = sock.fileno()
+        if which == WSAIoctls.SIO_BSP_HANDLE_SELECT:
+            return _handle(sock + 1)
+        else:
+            return _handle(sock)
+
+    monkeypatch.setattr(_io_windows, "_get_underlying_socket", patched_get_underlying)
+    with pytest.raises(
+        RuntimeError, match="SIO_BASE_HANDLE and SIO_BSP_HANDLE_SELECT differ"
+    ):
+        _core.run(sleep, 0)
+
+
+def test_lsp_that_completely_hides_base_socket_gives_good_error(monkeypatch):
+    # This tests behavior with an LSP that fails SIO_BASE_HANDLE and returns
+    # self for SIO_BSP_HANDLE_SELECT (like Komodia), but also returns
+    # self for SIO_BSP_HANDLE_POLL. No known LSP does this, but we want to
+    # make sure we get an error rather than an infinite loop.
+
+    from .._windows_cffi import WSAIoctls, _handle
+    from .. import _io_windows
+
+    def patched_get_underlying(sock, *, which=WSAIoctls.SIO_BASE_HANDLE):
+        if hasattr(sock, "fileno"):  # pragma: no branch
+            sock = sock.fileno()
+        if which == WSAIoctls.SIO_BASE_HANDLE:
+            raise OSError("nope")
+        else:
+            return _handle(sock)
+
+    monkeypatch.setattr(_io_windows, "_get_underlying_socket", patched_get_underlying)
+    with pytest.raises(
+        RuntimeError,
+        match="SIO_BASE_HANDLE failed and SIO_BSP_HANDLE_POLL didn't return a diff",
+    ):
+        _core.run(sleep, 0)

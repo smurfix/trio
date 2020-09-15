@@ -1,4 +1,6 @@
 import pytest
+import sys
+import socket
 
 import attr
 
@@ -46,7 +48,11 @@ def test_close_all():
 def test_reorder_for_rfc_6555_section_5_4():
     def fake4(i):
         return (
-            AF_INET, SOCK_STREAM, IPPROTO_TCP, "", ("10.0.0.{}".format(i), 80)
+            AF_INET,
+            SOCK_STREAM,
+            IPPROTO_TCP,
+            "",
+            ("10.0.0.{}".format(i), 80),
         )
 
     def fake6(i):
@@ -106,6 +112,62 @@ async def test_open_tcp_stream_input_validation():
         await open_tcp_stream(None, 80)
     with pytest.raises(TypeError):
         await open_tcp_stream("127.0.0.1", b"80")
+
+
+def can_bind_127_0_0_2():
+    with socket.socket() as s:
+        try:
+            s.bind(("127.0.0.2", 0))
+        except OSError:
+            return False
+        return s.getsockname()[0] == "127.0.0.2"
+
+
+async def test_local_address_real():
+    with trio.socket.socket() as listener:
+        await listener.bind(("127.0.0.1", 0))
+        listener.listen()
+
+        # It's hard to test local_address properly, because you need multiple
+        # local addresses that you can bind to. Fortunately, on most Linux
+        # systems, you can bind to any 127.*.*.* address, and they all go
+        # through the loopback interface. So we can use a non-standard
+        # loopback address. On other systems, the only address we know for
+        # certain we have is 127.0.0.1, so we can't really test local_address=
+        # properly -- passing local_address=127.0.0.1 is indistinguishable
+        # from not passing local_address= at all. But, we can still do a smoke
+        # test to make sure the local_address= code doesn't crash.
+        if can_bind_127_0_0_2():
+            local_address = "127.0.0.2"
+        else:
+            local_address = "127.0.0.1"
+
+        async with await open_tcp_stream(
+            *listener.getsockname(), local_address=local_address
+        ) as client_stream:
+            assert client_stream.socket.getsockname()[0] == local_address
+            if hasattr(trio.socket, "IP_BIND_ADDRESS_NO_PORT"):
+                assert client_stream.socket.getsockopt(
+                    trio.socket.IPPROTO_IP, trio.socket.IP_BIND_ADDRESS_NO_PORT
+                )
+
+            server_sock, remote_addr = await listener.accept()
+            await client_stream.aclose()
+            server_sock.close()
+            assert remote_addr[0] == local_address
+
+        # Trying to connect to an ipv4 address with the ipv6 wildcard
+        # local_address should fail
+        with pytest.raises(OSError):
+            await open_tcp_stream(*listener.getsockname(), local_address="::")
+
+        # But the ipv4 wildcard address should work
+        async with await open_tcp_stream(
+            *listener.getsockname(), local_address="0.0.0.0"
+        ) as client_stream:
+            server_sock, remote_addr = await listener.accept()
+            server_sock.close()
+            assert remote_addr == client_stream.socket.getsockname()
 
 
 # Now, thorough tests using fake sockets
@@ -225,7 +287,7 @@ async def run_scenario(
     # If this is True, we require there to be an exception, and return
     #   (exception, scenario object)
     expect_error=(),
-    **kwargs
+    **kwargs,
 ):
     supported_families = set()
     if ipv4_supported:
@@ -278,8 +340,7 @@ async def test_one_host_slow_fail(autojump_clock):
 
 async def test_one_host_failed_after_connect(autojump_clock):
     exc, scenario = await run_scenario(
-        83, [("1.2.3.4", 1, "postconnect_fail")],
-        expect_error=KeyboardInterrupt
+        83, [("1.2.3.4", 1, "postconnect_fail")], expect_error=KeyboardInterrupt
     )
     assert isinstance(exc, KeyboardInterrupt)
 

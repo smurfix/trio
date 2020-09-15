@@ -33,11 +33,16 @@ jobs:
         - "LINUX_VM_IMAGE=https://download.fedoraproject.org/pub/fedora/linux/releases/32/Cloud/x86_64/images/Fedora-Cloud-Base-32-1.6.x86_64.qcow2"
 
     - python: 3.6.1  # earliest 3.6 version available on Travis
+      # https://github.com/pypa/setuptools/issues/2350
+      env: SETUPTOOLS_USE_DISTUTILS=stdlib
       dist: bionic
     - python: 3.6-dev
     - python: 3.7-dev
     - python: 3.8-dev
-    - python: nightly
+    - python: 3.9-dev
+    # Temporarily disabled during the high-churn period of 3.10
+    # E.g.: https://github.com/MagicStack/immutables/issues/46
+    #- python: nightly
 
 script:
   - ./ci.sh

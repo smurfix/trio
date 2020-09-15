@@ -1,52 +1,66 @@
+# coding: utf-8
+
 import os
 import subprocess
 import sys
 from typing import Optional
 from functools import partial
 import warnings
+from typing import TYPE_CHECKING
 
 from ._abc import AsyncResource, SendStream, ReceiveStream
 from ._highlevel_generic import StapledStream
 from ._sync import Lock
 from ._subprocess_platform import (
-    wait_child_exiting, create_pipe_to_child_stdin,
-    create_pipe_from_child_output
+    wait_child_exiting,
+    create_pipe_to_child_stdin,
+    create_pipe_from_child_output,
 )
 from ._util import NoPublicConstructor
 import trio
 
 # Linux-specific, but has complex lifetime management stuff so we hard-code it
 # here instead of hiding it behind the _subprocess_platform abstraction
-can_try_pidfd_open = True
-try:
-    from os import pidfd_open
-except ImportError:
-    if sys.platform == "linux":
-        import ctypes
-        _cdll_for_pidfd_open = ctypes.CDLL(None, use_errno=True)
-        _cdll_for_pidfd_open.syscall.restype = ctypes.c_long
-        # pid and flags are actually int-sized, but the syscall() function
-        # always takes longs. (Except on x32 where long is 32-bits and syscall
-        # takes 64-bit arguments. But in the unlikely case that anyone is
-        # using x32, this will still work, b/c we only need to pass in 32 bits
-        # of data, and the C ABI doesn't distinguish between passing 32-bit vs
-        # 64-bit integers; our 32-bit values will get loaded into 64-bit
-        # registers where syscall() will find them.)
-        _cdll_for_pidfd_open.syscall.argtypes = [
-            ctypes.c_long,  # syscall number
-            ctypes.c_long,  # pid
-            ctypes.c_long,  # flags
-        ]
-        __NR_pidfd_open = 434
+can_try_pidfd_open: bool
+if TYPE_CHECKING:
 
-        def pidfd_open(fd, flags):
-            result = _cdll_for_pidfd_open.syscall(__NR_pidfd_open, fd, flags)
-            if result < 0:
-                err = ctypes.get_errno()
-                raise OSError(err, os.strerror(err))
-            return result
-    else:
-        can_try_pidfd_open = False
+    def pidfd_open(fd: int, flags: int) -> int:
+        ...
+
+
+else:
+    can_try_pidfd_open = True
+    try:
+        from os import pidfd_open
+    except ImportError:
+        if sys.platform == "linux":
+            import ctypes
+
+            _cdll_for_pidfd_open = ctypes.CDLL(None, use_errno=True)
+            _cdll_for_pidfd_open.syscall.restype = ctypes.c_long
+            # pid and flags are actually int-sized, but the syscall() function
+            # always takes longs. (Except on x32 where long is 32-bits and syscall
+            # takes 64-bit arguments. But in the unlikely case that anyone is
+            # using x32, this will still work, b/c we only need to pass in 32 bits
+            # of data, and the C ABI doesn't distinguish between passing 32-bit vs
+            # 64-bit integers; our 32-bit values will get loaded into 64-bit
+            # registers where syscall() will find them.)
+            _cdll_for_pidfd_open.syscall.argtypes = [
+                ctypes.c_long,  # syscall number
+                ctypes.c_long,  # pid
+                ctypes.c_long,  # flags
+            ]
+            __NR_pidfd_open = 434
+
+            def pidfd_open(fd: int, flags: int) -> int:
+                result = _cdll_for_pidfd_open.syscall(__NR_pidfd_open, fd, flags)
+                if result < 0:
+                    err = ctypes.get_errno()
+                    raise OSError(err, os.strerror(err))
+                return result
+
+        else:
+            can_try_pidfd_open = False
 
 
 class Process(AsyncResource, metaclass=NoPublicConstructor):
@@ -312,12 +326,11 @@ async def open_process(
          specified command could not be found.
 
     """
-    for key in ('universal_newlines', 'text', 'encoding', 'errors', 'bufsize'):
+    for key in ("universal_newlines", "text", "encoding", "errors", "bufsize"):
         if options.get(key):
             raise TypeError(
                 "trio.Process only supports communicating over "
-                "unbuffered byte streams; the '{}' option is not supported"
-                .format(key)
+                "unbuffered byte streams; the '{}' option is not supported".format(key)
             )
 
     if os.name == "posix":
@@ -361,7 +374,7 @@ async def open_process(
                 stdin=stdin,
                 stdout=stdout,
                 stderr=stderr,
-                **options
+                **options,
             )
         )
     finally:
@@ -382,9 +395,7 @@ async def _windows_deliver_cancel(p):
     try:
         p.terminate()
     except OSError as exc:
-        warnings.warn(
-            RuntimeWarning(f"TerminateProcess on {p!r} failed with: {exc!r}")
-        )
+        warnings.warn(RuntimeWarning(f"TerminateProcess on {p!r} failed with: {exc!r}"))
 
 
 async def _posix_deliver_cancel(p):
@@ -401,9 +412,7 @@ async def _posix_deliver_cancel(p):
         p.kill()
     except OSError as exc:
         warnings.warn(
-            RuntimeWarning(
-                f"tried to kill process {p!r}, but failed with: {exc!r}"
-            )
+            RuntimeWarning(f"tried to kill process {p!r}, but failed with: {exc!r}")
         )
 
 
@@ -415,7 +424,7 @@ async def run_process(
     capture_stderr=False,
     check=True,
     deliver_cancel=None,
-    **options
+    **options,
 ):
     """Run ``command`` in a subprocess, wait for it to complete, and
     return a :class:`subprocess.CompletedProcess` instance describing
@@ -444,10 +453,10 @@ async def run_process(
     :attr:`~subprocess.CompletedProcess.stderr` attributes of the
     returned :class:`~subprocess.CompletedProcess` object.  The value
     for any stream that was not captured will be ``None``.
-    
+
     If you want to capture both stdout and stderr while keeping them
     separate, pass ``capture_stdout=True, capture_stderr=True``.
-    
+
     If you want to capture both stdout and stderr but mixed together
     in the order they were printed, use: ``capture_stdout=True, stderr=subprocess.STDOUT``.
     This directs the child's stderr into its stdout, so the combined
@@ -638,6 +647,4 @@ async def run_process(
             proc.returncode, proc.args, output=stdout, stderr=stderr
         )
     else:
-        return subprocess.CompletedProcess(
-            proc.args, proc.returncode, stdout, stderr
-        )
+        return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
