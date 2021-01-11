@@ -937,7 +937,12 @@ class Nursery(metaclass=NoPublicConstructor):
         popped = self._parent_task._child_nurseries.pop()
         assert popped is self
         if self._pending_excs:
-            return MultiError(self._pending_excs)
+            try:
+                return MultiError(self._pending_excs)
+            finally:
+                # avoid a garbage cycle
+                # (see test_nursery_cancel_doesnt_create_cyclic_garbage)
+                del self._pending_excs
 
     def start_soon(self, async_fn, *args, name=None):
         """Creates a child task, scheduling ``await async_fn(*args)``.
@@ -1546,6 +1551,15 @@ class Runner:
 
         * System tasks do not inherit context variables from their creator.
 
+        Towards the end of a call to :meth:`trio.run`, after the main
+        task and all system tasks have exited, the system nursery
+        becomes closed. At this point, new calls to
+        :func:`spawn_system_task` will raise ``RuntimeError("Nursery
+        is closed to new arrivals")`` instead of creating a system
+        task. It's possible to encounter this state either in
+        a ``finally`` block in an async generator, or in a callback
+        passed to :meth:`TrioToken.run_sync_soon` at the right moment.
+
         Args:
           async_fn: An async callable.
           args: Positional arguments for ``async_fn``. If you want to pass
@@ -1652,7 +1666,7 @@ class Runner:
     waiting_for_idle = attr.ib(factory=SortedDict)
 
     @_public
-    async def wait_all_tasks_blocked(self, cushion=0.0, tiebreaker="deprecated"):
+    async def wait_all_tasks_blocked(self, cushion=0.0):
         """Block until there are no runnable tasks.
 
         This is useful in testing code when you want to give other tasks a
@@ -1710,18 +1724,8 @@ class Runner:
                          print("FAIL")
 
         """
-        if tiebreaker == "deprecated":
-            tiebreaker = 0
-        else:
-            warn_deprecated(
-                "the 'tiebreaker' argument to wait_all_tasks_blocked",
-                "v0.16.0",
-                issue=1558,
-                instead=None,
-            )
-
         task = current_task()
-        key = (cushion, tiebreaker, id(task))
+        key = (cushion, id(task))
         self.waiting_for_idle[key] = task
 
         def abort(_):
@@ -2048,7 +2052,7 @@ def unrolled_run(runner, async_fn, args, host_uses_signal_set_wakeup_fd=False):
 
             idle_primed = None
             if runner.waiting_for_idle:
-                cushion, tiebreaker, _ = runner.waiting_for_idle.keys()[0]
+                cushion, _ = runner.waiting_for_idle.keys()[0]
                 if cushion < timeout:
                     timeout = cushion
                     idle_primed = IdlePrimedTypes.WAITING_FOR_IDLE
@@ -2100,7 +2104,7 @@ def unrolled_run(runner, async_fn, args, host_uses_signal_set_wakeup_fd=False):
                 if idle_primed is IdlePrimedTypes.WAITING_FOR_IDLE:
                     while runner.waiting_for_idle:
                         key, task = runner.waiting_for_idle.peekitem(0)
-                        if key[:2] == (cushion, tiebreaker):
+                        if key[0] == cushion:
                             del runner.waiting_for_idle[key]
                             runner.reschedule(task)
                         else:

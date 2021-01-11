@@ -126,6 +126,15 @@ def spawn_system_task(async_fn, *args, name=None):
 
         * System tasks do not inherit context variables from their creator.
 
+        Towards the end of a call to :meth:`trio.run`, after the main
+        task and all system tasks have exited, the system nursery
+        becomes closed. At this point, new calls to
+        :func:`spawn_system_task` will raise ``RuntimeError("Nursery
+        is closed to new arrivals")`` instead of creating a system
+        task. It's possible to encounter this state either in
+        a ``finally`` block in an async generator, or in a callback
+        passed to :meth:`TrioToken.run_sync_soon` at the right moment.
+
         Args:
           async_fn: An async callable.
           args: Positional arguments for ``async_fn``. If you want to pass
@@ -160,7 +169,7 @@ def current_trio_token():
         raise RuntimeError("must be called from async context")
 
 
-async def wait_all_tasks_blocked(cushion=0.0, tiebreaker='deprecated'):
+async def wait_all_tasks_blocked(cushion=0.0):
     """Block until there are no runnable tasks.
 
         This is useful in testing code when you want to give other tasks a
@@ -220,7 +229,7 @@ async def wait_all_tasks_blocked(cushion=0.0, tiebreaker='deprecated'):
         """
     locals()[LOCALS_KEY_KI_PROTECTION_ENABLED] = True
     try:
-        return await GLOBAL_RUN_CONTEXT.runner.wait_all_tasks_blocked(cushion, tiebreaker)
+        return await GLOBAL_RUN_CONTEXT.runner.wait_all_tasks_blocked(cushion)
     except AttributeError:
         raise RuntimeError("must be called from async context")
 

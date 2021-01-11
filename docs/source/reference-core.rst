@@ -524,6 +524,10 @@ objects.
 
    .. autoattribute:: cancel_called
 
+Often there is no need to create :class:`CancelScope` object. Trio
+already includes :attr:`~trio.Nursery.cancel_scope` attribute in a
+task-related :class:`Nursery` object. We will cover nurseries later in
+the manual.
 
 Trio also provides several convenience functions for the common
 situation of just wanting to impose a timeout on some code:
@@ -1086,7 +1090,7 @@ you'll see that the two tasks politely take turns::
    async def loopy_child(number, lock):
        while True:
            async with lock:
-               print("Child {} has the lock!".format(number))
+               print(f"Child {number} has the lock!")
                await trio.sleep(0.5)
 
    async def main():
@@ -1632,9 +1636,11 @@ an exception, where can that exception be reraised?
 
 If you have an async generator that wants to ``yield`` from within a nursery
 or cancel scope, your best bet is to refactor it to be a separate task
-that communicates over memory channels.
+that communicates over memory channels.  The ``trio_util`` package offers a
+`decorator that does this for you transparently
+<https://trio-util.readthedocs.io/en/latest/#trio_util.trio_async_generator>`__.
 
-For more discussion and some experimental partial workarounds, see
+For more discussion, see
 Trio issues `264 <https://github.com/python-trio/trio/issues/264>`__
 (especially `this comment
 <https://github.com/python-trio/trio/issues/264#issuecomment-418989328>`__)

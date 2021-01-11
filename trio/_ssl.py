@@ -158,8 +158,7 @@ import trio
 from .abc import Stream, Listener
 from ._highlevel_generic import aclose_forcefully
 from . import _sync
-from ._util import ConflictDetector, SubclassingDeprecatedIn_v0_15_0
-from ._deprecate import warn_deprecated
+from ._util import ConflictDetector, Final
 
 ################################################################
 # SSLStream
@@ -224,7 +223,7 @@ class _Once:
 _State = _Enum("_State", ["OK", "BROKEN", "CLOSED"])
 
 
-class SSLStream(Stream, metaclass=SubclassingDeprecatedIn_v0_15_0):
+class SSLStream(Stream, metaclass=Final):
     r"""Encrypted communication using SSL/TLS.
 
     :class:`SSLStream` wraps an arbitrary :class:`~trio.abc.Stream`, and
@@ -328,12 +327,9 @@ class SSLStream(Stream, metaclass=SubclassingDeprecatedIn_v0_15_0):
         server_hostname=None,
         server_side=False,
         https_compatible=False,
-        max_refill_bytes="unused and deprecated",
     ):
         self.transport_stream = transport_stream
         self._state = _State.OK
-        if max_refill_bytes != "unused and deprecated":
-            warn_deprecated("max_refill_bytes=...", "0.12.0", issue=959, instead=None)
         self._https_compatible = https_compatible
         self._outgoing = _stdlib_ssl.MemoryBIO()
         self._delayed_outgoing = None
@@ -870,7 +866,7 @@ class SSLStream(Stream, metaclass=SubclassingDeprecatedIn_v0_15_0):
                 await self.transport_stream.wait_send_all_might_not_block()
 
 
-class SSLListener(Listener[SSLStream], metaclass=SubclassingDeprecatedIn_v0_15_0):
+class SSLListener(Listener[SSLStream], metaclass=Final):
     """A :class:`~trio.abc.Listener` for SSL/TLS-encrypted servers.
 
     :class:`SSLListener` wraps around another Listener, and converts
@@ -898,10 +894,7 @@ class SSLListener(Listener[SSLStream], metaclass=SubclassingDeprecatedIn_v0_15_0
         ssl_context,
         *,
         https_compatible=False,
-        max_refill_bytes="unused and deprecated",
     ):
-        if max_refill_bytes != "unused and deprecated":
-            warn_deprecated("max_refill_bytes=...", "0.12.0", issue=959, instead=None)
         self.transport_listener = transport_listener
         self._ssl_context = ssl_context
         self._https_compatible = https_compatible
