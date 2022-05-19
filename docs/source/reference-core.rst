@@ -667,7 +667,7 @@ In Trio, child tasks inherit the parent nursery's cancel scopes. So in
 this example, both the child tasks will be cancelled when the timeout
 expires::
 
-   with move_on_after(TIMEOUT):
+   with trio.move_on_after(TIMEOUT):
        async with trio.open_nursery() as nursery:
            nursery.start_soon(child1)
            nursery.start_soon(child2)
@@ -678,12 +678,12 @@ Note that what matters here is the scopes that were active when
 nothing at all::
 
    async with trio.open_nursery() as nursery:
-       with move_on_after(TIMEOUT):  # don't do this!
+       with trio.move_on_after(TIMEOUT):  # don't do this!
            nursery.start_soon(child)
 
-Why is this so? Well, ``start_soon()`` returns as soon as it has scheduled the new task to start running. The flow of execution in the parent then continues on to exit the ``with move_on_after(TIMEOUT):`` block, at which point Trio forgets about the timeout entirely. In order for the timeout to apply to the child task, Trio must be able to tell that its associated cancel scope will stay open for at least as long as the child task is executing. And Trio can only know that for sure if the cancel scope block is outside the nursery block.
+Why is this so? Well, ``start_soon()`` returns as soon as it has scheduled the new task to start running. The flow of execution in the parent then continues on to exit the ``with trio.move_on_after(TIMEOUT):`` block, at which point Trio forgets about the timeout entirely. In order for the timeout to apply to the child task, Trio must be able to tell that its associated cancel scope will stay open for at least as long as the child task is executing. And Trio can only know that for sure if the cancel scope block is outside the nursery block.
 
-You might wonder why Trio can't just remember "this task should be cancelled in ``TIMEOUT`` seconds", even after the ``with move_on_after(TIMEOUT):`` block is gone. The reason has to do with :ref:`how cancellation is implemented <cancellation>`. Recall that cancellation is represented by a `Cancelled` exception, which eventually needs to be caught by the cancel scope that caused it. (Otherwise, the exception would take down your whole program!) In order to be able to cancel the child tasks, the cancel scope has to be able to "see" the `Cancelled` exceptions that they raise -- and those exceptions come out of the ``async with open_nursery()`` block, not out of the call to ``start_soon()``.
+You might wonder why Trio can't just remember "this task should be cancelled in ``TIMEOUT`` seconds", even after the ``with trio.move_on_after(TIMEOUT):`` block is gone. The reason has to do with :ref:`how cancellation is implemented <cancellation>`. Recall that cancellation is represented by a `Cancelled` exception, which eventually needs to be caught by the cancel scope that caused it. (Otherwise, the exception would take down your whole program!) In order to be able to cancel the child tasks, the cancel scope has to be able to "see" the `Cancelled` exceptions that they raise -- and those exceptions come out of the ``async with open_nursery()`` block, not out of the call to ``start_soon()``.
 
 If you want a timeout to apply to one task but not another, then you need to put the cancel scope in that individual task's function -- ``child()``, in this example.
 
@@ -763,7 +763,7 @@ example, the timeout does *not* apply to ``child`` (or to anything
 else)::
 
    async def do_spawn(nursery):
-       with move_on_after(TIMEOUT):  # don't do this, it has no effect
+       with trio.move_on_after(TIMEOUT):  # don't do this, it has no effect
            nursery.start_soon(child)
 
    async with trio.open_nursery() as nursery:
@@ -794,23 +794,23 @@ finishes first::
        if not async_fns:
            raise ValueError("must pass at least one argument")
 
-       send_channel, receive_channel = trio.open_memory_channel(0)
+       winner = None
 
-       async def jockey(async_fn):
-           await send_channel.send(await async_fn())
+       async def jockey(async_fn, cancel_scope):
+           nonlocal winner
+           winner = await async_fn()
+           cancel_scope.cancel()
 
        async with trio.open_nursery() as nursery:
            for async_fn in async_fns:
-               nursery.start_soon(jockey, async_fn)
-           winner = await receive_channel.receive()
-           nursery.cancel_scope.cancel()
-           return winner
+               nursery.start_soon(jockey, async_fn, nursery.cancel_scope)
+
+       return winner
 
 This works by starting a set of tasks which each try to run their
-function, and then report back the value it returns. The main task
-uses ``receive_channel.receive`` to wait for one to finish; as soon as
-the first task crosses the finish line, it cancels the rest, and then
-returns the winning value.
+function. As soon as the first function completes its execution, the task will set the nonlocal variable ``winner``
+from the outer scope to the result of the function, and cancel the other tasks using the passed in cancel scope. Once all tasks
+have been cancelled (which exits the nursery block), the variable ``winner`` will be returned.
 
 Here if one or more of the racing functions raises an unhandled
 exception then Trio's normal handling kicks in: it cancels the others
@@ -1021,7 +1021,7 @@ Example output (yours may differ slightly):
    request 0: Request received finished
 
 For more information, read the
-`contextvar docs <https://docs.python.org/3.7/library/contextvars.html>`__.
+`contextvars docs <https://docs.python.org/3.7/library/contextvars.html>`__.
 
 
 .. _synchronization:
@@ -1819,6 +1819,66 @@ to spawn a child thread, and then use a :ref:`memory channel
 <channels>` to send messages between the thread and a Trio task:
 
 .. literalinclude:: reference-core/from-thread-example.py
+
+Threads and task-local storage
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When working with threads, you can use the same `contextvars` we discussed above,
+because their values are preserved.
+
+This is done by automatically copying the `contextvars` context when you use any of:
+
+* `trio.to_thread.run_sync`
+* `trio.from_thread.run`
+* `trio.from_thread.run_sync`
+
+That means that the values of the context variables are accessible even in worker
+threads, or when sending a function to be run in the main/parent Trio thread using
+`trio.from_thread.run` *from* one of these worker threads.
+
+But it also means that as the context is not the same but a copy, if you `set` the
+context variable value *inside* one of these functions that work in threads, the
+new value will only be available in that context (that was copied). So, the new value
+will be available for that function and other internal/children tasks, but the value
+won't be available in the parent thread.
+
+If you need to modify values that would live in the context variables and you need to
+make those modifications from the child threads, you can instead set a mutable object
+(e.g. a dictionary) in the context variable of the top level/parent Trio thread.
+Then in the children, instead of setting the context variable, you can ``get`` the same
+object, and modify its values. That way you keep the same object in the context
+variable and only mutate it in child threads.
+
+This way, you can modify the object content in child threads and still access the
+new content in the parent thread.
+
+Here's an example:
+
+.. literalinclude:: reference-core/thread-contextvars-example.py
+
+Running that script will result in the output:
+
+.. code-block:: none
+
+    Processed user 2 with message Hello 2 in a thread worker
+    Processed user 0 with message Hello 0 in a thread worker
+    Processed user 1 with message Hello 1 in a thread worker
+    New contextvar value from worker thread for user 2: Hello 2
+    New contextvar value from worker thread for user 1: Hello 1
+    New contextvar value from worker thread for user 0: Hello 0
+
+If you are using ``contextvars`` or you are using a library that uses them, now you
+know how they interact when working with threads in Trio.
+
+But have in mind that in many cases it might be a lot simpler to *not* use context
+variables in your own code and instead pass values in arguments, as it might be more
+explicit and might be easier to reason about.
+
+.. note::
+
+   The context is automatically copied instead of using the same parent context because
+   a single context can't be used in more than one thread, it's not supported by
+   ``contextvars``.
 
 
 Exceptions and warnings

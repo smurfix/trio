@@ -1,12 +1,14 @@
 # Utilities for testing
+import asyncio
 import socket as stdlib_socket
+import threading
 import os
 import sys
 from typing import TYPE_CHECKING
 
 import pytest
 import warnings
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 
 import gc
 
@@ -80,6 +82,43 @@ def ignore_coroutine_never_awaited_warnings():
             gc_collect_harder()
 
 
+def _noop(*args, **kwargs):
+    pass
+
+
+if sys.version_info >= (3, 8):
+
+    @contextmanager
+    def restore_unraisablehook():
+        sys.unraisablehook, prev = sys.__unraisablehook__, sys.unraisablehook
+        try:
+            yield
+        finally:
+            sys.unraisablehook = prev
+
+    @contextmanager
+    def disable_threading_excepthook():
+        if sys.version_info >= (3, 10):
+            threading.excepthook, prev = threading.__excepthook__, threading.excepthook
+        else:
+            threading.excepthook, prev = _noop, threading.excepthook
+
+        try:
+            yield
+        finally:
+            threading.excepthook = prev
+
+else:
+
+    @contextmanager
+    def restore_unraisablehook():  # pragma: no cover
+        yield
+
+    @contextmanager
+    def disable_threading_excepthook():  # pragma: no cover
+        yield
+
+
 # template is like:
 #   [1, {2.1, 2.2}, 3] -> matches [1, 2.1, 2.2, 3] or [1, 2.2, 2.1, 3]
 def check_sequence_matches(seq, template):
@@ -100,3 +139,8 @@ skip_if_fbsd_pipes_broken = pytest.mark.skipif(
     and os.uname().release[:4] < "12.2",
     reason="hangs on FreeBSD 12.1 and earlier, due to FreeBSD bug #246350",
 )
+
+
+def create_asyncio_future_in_new_loop():
+    with closing(asyncio.new_event_loop()) as loop:
+        return loop.create_future()

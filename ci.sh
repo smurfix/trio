@@ -30,7 +30,7 @@ function curl-harder() {
 # Bootstrap python environment, if necessary
 ################################################################
 
-### PyPy nightly (currently on Travis) ###
+### PyPy nightly ###
 
 if [ "$PYPY_NIGHTLY_BRANCH" != "" ]; then
     JOB_NAME="pypy_nightly_${PYPY_NIGHTLY_BRANCH}"
@@ -71,14 +71,6 @@ python -m pip --version
 
 python setup.py sdist --formats=zip
 python -m pip install dist/*.zip
-
-if python -c 'import sys; sys.exit(sys.version_info >= (3, 7))'; then
-    # Python < 3.7, select last ipython with 3.6 support
-    # macOS requires the suffix for --in-place or you get an undefined label error
-    sed -i'.bak' 's/ipython==[^ ]*/ipython==7.16.1/' test-requirements.txt
-    sed -i'.bak' 's/traitlets==[^ ]*/traitlets==4.3.3/' test-requirements.txt
-    git diff test-requirements.txt
-fi
 
 if [ "$CHECK_FORMATTING" = "1" ]; then
     python -m pip install -r test-requirements.txt
@@ -143,13 +135,13 @@ else
     cd empty
 
     INSTALLDIR=$(python -c "import os, trio; print(os.path.dirname(trio.__file__))")
-    cp ../setup.cfg $INSTALLDIR
+    cp ../pyproject.toml $INSTALLDIR
     # We have to copy .coveragerc into this directory, rather than passing
     # --cov-config=../.coveragerc to pytest, because codecov.sh will run
     # 'coverage xml' to generate the report that it uses, and that will only
     # apply the ignore patterns in the current directory's .coveragerc.
     cp ../.coveragerc .
-    if pytest -W error -r a --junitxml=../test-results.xml --run-slow ${INSTALLDIR} --cov="$INSTALLDIR" --verbose; then
+    if pytest -r a --junitxml=../test-results.xml --run-slow ${INSTALLDIR} --cov="$INSTALLDIR" --verbose; then
         PASSED=true
     else
         PASSED=false

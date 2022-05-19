@@ -15,8 +15,8 @@ class EntryQueue:
     # not signal-safe. deque is implemented in C, so each operation is atomic
     # WRT threads (and this is guaranteed in the docs), AND each operation is
     # atomic WRT signal delivery (signal handlers can run on either side, but
-    # not *during* a deque operation). dict makes similar guarantees - and on
-    # CPython 3.6 and PyPy, it's even ordered!
+    # not *during* a deque operation). dict makes similar guarantees - and
+    # it's even ordered!
     queue = attr.ib(factory=deque)
     idempotent_queue = attr.ib(factory=dict)
 
@@ -126,6 +126,7 @@ class EntryQueue:
             self.wakeup.wakeup_thread_and_signal_safe()
 
 
+@attr.s(eq=False, hash=False, slots=True)
 class TrioToken(metaclass=NoPublicConstructor):
     """An opaque object representing a single call to :func:`trio.run`.
 
@@ -145,10 +146,7 @@ class TrioToken(metaclass=NoPublicConstructor):
 
     """
 
-    __slots__ = ("_reentry_queue",)
-
-    def __init__(self, reentry_queue):
-        self._reentry_queue = reentry_queue
+    _reentry_queue = attr.ib()
 
     def run_sync_soon(self, sync_fn, *args, idempotent=False):
         """Schedule a call to ``sync_fn(*args)`` to occur in the context of a
