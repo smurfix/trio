@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 #
 # Trio documentation build configuration file, created by
 # sphinx-quickstart on Sat Jan 21 19:11:14 2017.
@@ -17,24 +16,53 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
+from __future__ import annotations
+
+import collections.abc
 import os
 import sys
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from sphinx.application import Sphinx
+    from sphinx.util.typing import Inventory
+
 # For our local_customization module
-sys.path.insert(0, os.path.abspath('.'))
+sys.path.insert(0, os.path.abspath("."))
 # For trio itself
-sys.path.insert(0, os.path.abspath('../..'))
+sys.path.insert(0, os.path.abspath("../../src"))
+
+# Enable reloading with `typing.TYPE_CHECKING` being True
+os.environ["SPHINX_AUTODOC_RELOAD_MODULES"] = "1"
 
 # https://docs.readthedocs.io/en/stable/builds.html#build-environment
 if "READTHEDOCS" in os.environ:
     import glob
+
     if glob.glob("../../newsfragments/*.*.rst"):
         print("-- Found newsfragments; running towncrier --", flush=True)
         import subprocess
+
         subprocess.run(
             ["towncrier", "--yes", "--date", "not released yet"],
             cwd="../..",
             check=True,
         )
+
+# Sphinx is very finicky, and somewhat buggy, so we have several different
+# methods to help it resolve links.
+# 1. The ones that are not possible to fix are added to `nitpick_ignore`
+# 2. some can be resolved with a simple alias in `autodoc_type_aliases`,
+#    even if that is primarily meant for TypeAliases
+# 3. autodoc_process_signature is hooked up to an event, and we use it for
+#    whole-sale replacing types in signatures where internal details are not
+#    relevant or hard to read.
+# 4. add_intersphinx manually modifies the intersphinx mappings after
+#    objects.inv has been parsed, to resolve bugs and version differences
+#    that causes some objects to be looked up incorrectly.
+# 5. docs/source/typevars.py handles redirecting `typing_extensions` objects to `typing`, and linking `TypeVar`s to `typing.TypeVar` instead of sphinx wanting to link them to their individual definitions.
+# It's possible there's better methods for resolving some of the above
+# problems, but this works for now:tm:
 
 # Warn about all references to unknown targets
 nitpicky = True
@@ -42,29 +70,69 @@ nitpicky = True
 nitpick_ignore = [
     ("py:class", "CapacityLimiter-like object"),
     ("py:class", "bytes-like"),
-    ("py:class", "None"),
     # Was removed but still shows up in changelog
     ("py:class", "trio.lowlevel.RunLocal"),
     # trio.abc is documented at random places scattered throughout the docs
     ("py:mod", "trio.abc"),
-    ("py:class", "math.inf"),
     ("py:exc", "Anything else"),
     ("py:class", "async function"),
     ("py:class", "sync function"),
-    # https://github.com/sphinx-doc/sphinx/issues/7722
-    ("py:class", "SendType"),
-    ("py:class", "ReceiveType"),
+    # these do not have documentation on python.org
+    # nor entries in objects.inv
+    ("py:class", "socket.AddressFamily"),
+    ("py:class", "socket.SocketKind"),
 ]
 autodoc_inherit_docstrings = False
 default_role = "obj"
+
+
+# A dictionary for users defined type aliases that maps a type name to the full-qualified object name. It is used to keep type aliases not evaluated in the document.
+# https://www.sphinx-doc.org/en/master/usage/extensions/autodoc.html#confval-autodoc_type_aliases
+# but it can also be used to help resolve various linking problems
+autodoc_type_aliases = {
+    # SSLListener.accept's return type is seen as trio._ssl.SSLStream
+    "SSLStream": "trio.SSLStream",
+}
+
+
+# https://www.sphinx-doc.org/en/master/usage/extensions/autodoc.html#event-autodoc-process-signature
+def autodoc_process_signature(
+    app: Sphinx,
+    what: object,
+    name: str,
+    obj: object,
+    options: object,
+    signature: str,
+    return_annotation: str,
+) -> tuple[str, str]:
+    """Modify found signatures to fix various issues."""
+    if signature is not None:
+        signature = signature.replace("~_contextvars.Context", "~contextvars.Context")
+        if name == "trio.lowlevel.RunVar":  # Typevar is not useful here.
+            signature = signature.replace(": ~trio._core._local.T", "")
+        if "_NoValue" in signature:
+            # Strip the type from the union, make it look like = ...
+            signature = signature.replace(" | type[trio._core._local._NoValue]", "")
+            signature = signature.replace("<class 'trio._core._local._NoValue'>", "...")
+        if "DTLS" in name:
+            signature = signature.replace("SSL.Context", "OpenSSL.SSL.Context")
+        # Don't specify PathLike[str] | PathLike[bytes], this is just for humans.
+        signature = signature.replace("StrOrBytesPath", "str | bytes | os.PathLike")
+
+    return signature, return_annotation
+
 
 # XX hack the RTD theme until
 #   https://github.com/rtfd/sphinx_rtd_theme/pull/382
 # is shipped (should be in the release after 0.2.4)
 # ...note that this has since grown to contain a bunch of other CSS hacks too
 # though.
-def setup(app):
+def setup(app: Sphinx) -> None:
     app.add_css_file("hackrtd.css")
+    app.connect("autodoc-process-signature", autodoc_process_signature)
+    # After Intersphinx runs, add additional mappings.
+    app.connect("builder-inited", add_intersphinx, priority=1000)
+
 
 # -- General configuration ------------------------------------------------
 
@@ -76,37 +144,87 @@ def setup(app):
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
-    'sphinx.ext.autodoc',
-    'sphinx.ext.intersphinx',
-    'sphinx.ext.coverage',
-    'sphinx.ext.napoleon',
-    'sphinxcontrib_trio',
-    'local_customization',
+    "sphinx.ext.autodoc",
+    "sphinx.ext.intersphinx",
+    "sphinx.ext.coverage",
+    "sphinx.ext.napoleon",
+    "sphinxcontrib_trio",
+    "sphinxcontrib.jquery",
+    "local_customization",
+    "typevars",
 ]
 
 intersphinx_mapping = {
-    "python": ('https://docs.python.org/3', None),
-    "outcome": ('https://outcome.readthedocs.io/en/latest/', None),
+    "python": ("https://docs.python.org/3", None),
+    "outcome": ("https://outcome.readthedocs.io/en/latest/", None),
+    "pyopenssl": ("https://www.pyopenssl.org/en/stable/", None),
+    "sniffio": ("https://sniffio.readthedocs.io/en/latest/", None),
 }
+
+
+def add_intersphinx(app: Sphinx) -> None:
+    """Add some specific intersphinx mappings.
+
+    Hooked up to builder-inited. app.builder.env.interpshinx_inventory is not an official API, so this may break on new sphinx versions.
+    """
+
+    def add_mapping(
+        reftype: str,
+        library: str,
+        obj: str,
+        version: str = "3.12",
+        target: str | None = None,
+    ) -> None:
+        """helper function"""
+        url_version = "3" if version == "3.12" else version
+        if target is None:
+            target = f"{library}.{obj}"
+
+        # sphinx doing fancy caching stuff makes this attribute invisible
+        # to type checkers
+        inventory = app.builder.env.intersphinx_inventory  # type: ignore[attr-defined]
+        assert isinstance(inventory, dict)
+        inventory = cast("Inventory", inventory)
+
+        inventory[f"py:{reftype}"][f"{target}"] = (
+            "Python",
+            version,
+            f"https://docs.python.org/{url_version}/library/{library}.html/{obj}",
+            "-",
+        )
+
+    # This has been removed in Py3.12, so add a link to the 3.11 version with deprecation warnings.
+    add_mapping("method", "pathlib", "Path.link_to", "3.11")
+    # defined in py:data in objects.inv, but sphinx looks for a py:class
+    add_mapping("class", "math", "inf")
+    # `types.FrameType.__module__` is "builtins", so sphinx looks for
+    # builtins.FrameType.
+    # See https://github.com/sphinx-doc/sphinx/issues/11802
+    add_mapping("class", "types", "FrameType")
+    # new in py3.12, and need target because sphinx is unable to look up
+    # the module of the object if compiling on <3.12
+    if not hasattr(collections.abc, "Buffer"):
+        add_mapping("class", "collections.abc", "Buffer", target="Buffer")
+
 
 autodoc_member_order = "bysource"
 
 # Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
+templates_path = ["_templates"]
 
 # The suffix(es) of source filenames.
 # You can specify multiple suffix as a list of string:
 #
 # source_suffix = ['.rst', '.md']
-source_suffix = '.rst'
+source_suffix = ".rst"
 
 # The master toctree document.
-master_doc = 'index'
+master_doc = "index"
 
 # General information about the project.
-project = 'Trio'
-copyright = '2017, Nathaniel J. Smith'
-author = 'Nathaniel J. Smith'
+project = "Trio"
+copyright = "2017, Nathaniel J. Smith"
+author = "Nathaniel J. Smith"
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -114,6 +232,7 @@ author = 'Nathaniel J. Smith'
 #
 # The short X.Y version.
 import trio
+
 version = trio.__version__
 # The full version, including alpha/beta/rc tags.
 release = version
@@ -127,17 +246,17 @@ html_logo = "../../logo/wordmark-transparent.svg"
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = None
+language = "en"
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This patterns also effect to html_static_path and html_extra_path
-exclude_patterns = []
+exclude_patterns: list[str] = []
 
 # The name of the Pygments (syntax highlighting) style to use.
-pygments_style = 'default'
+pygments_style = "default"
 
-highlight_language = 'python3'
+highlight_language = "python3"
 
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = False
@@ -152,13 +271,14 @@ suppress_warnings = ["epub.unknown_project_files"]
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-#html_theme = 'alabaster'
+# html_theme = 'alabaster'
 
 # We have to set this ourselves, not only because it's useful for local
 # testing, but also because if we don't then RTD will throw away our
 # html_theme_options.
 import sphinx_rtd_theme
-html_theme = 'sphinx_rtd_theme'
+
+html_theme = "sphinx_rtd_theme"
 html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 
 # Theme options are theme-specific and customize the look and feel of a theme
@@ -173,36 +293,33 @@ html_theme_options = {
     # versions/settings...
     "navigation_depth": 4,
     "logo_only": True,
-    'prev_next_buttons_location': 'both'
+    "prev_next_buttons_location": "both",
 }
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['_static']
+html_static_path = ["_static"]
 
 
 # -- Options for HTMLHelp output ------------------------------------------
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = 'Triodoc'
+htmlhelp_basename = "Triodoc"
 
 
 # -- Options for LaTeX output ---------------------------------------------
 
-latex_elements = {
+latex_elements: dict[str, object] = {
     # The paper size ('letterpaper' or 'a4paper').
     #
     # 'papersize': 'letterpaper',
-
     # The font size ('10pt', '11pt' or '12pt').
     #
     # 'pointsize': '10pt',
-
     # Additional stuff for the LaTeX preamble.
     #
     # 'preamble': '',
-
     # Latex figure (float) alignment
     #
     # 'figure_align': 'htbp',
@@ -212,8 +329,7 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-    (master_doc, 'Trio.tex', 'Trio Documentation',
-     'Nathaniel J. Smith', 'manual'),
+    (master_doc, "Trio.tex", "Trio Documentation", "Nathaniel J. Smith", "manual"),
 ]
 
 
@@ -221,10 +337,7 @@ latex_documents = [
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [
-    (master_doc, 'trio', 'Trio Documentation',
-     [author], 1)
-]
+man_pages = [(master_doc, "trio", "Trio Documentation", [author], 1)]
 
 
 # -- Options for Texinfo output -------------------------------------------
@@ -233,7 +346,13 @@ man_pages = [
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-    (master_doc, 'Trio', 'Trio Documentation',
-     author, 'Trio', 'One line description of project.',
-     'Miscellaneous'),
+    (
+        master_doc,
+        "Trio",
+        "Trio Documentation",
+        author,
+        "Trio",
+        "One line description of project.",
+        "Miscellaneous",
+    ),
 ]

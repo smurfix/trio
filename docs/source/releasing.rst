@@ -29,7 +29,7 @@ Things to do for releasing:
 
       - review history change
 
-      - ``git rm`` changes
+      - ``git rm`` the now outdated newfragments
 
    + commit
 
@@ -44,7 +44,7 @@ Things to do for releasing:
 * push to PyPI::
 
     git clean -xdf   # maybe run 'git clean -xdn' first to see what it will delete
-    python3 setup.py sdist bdist_wheel
+    python3 -m build
     twine upload dist/*
 
 * update version number in the same pull request
@@ -52,5 +52,11 @@ Things to do for releasing:
    + add ``+dev`` tag to the end
 
 * merge the release pull request
+
+* make a GitHub release (go to the tag and press "Create release from tag")
+
+   + paste in the new content in ``history.rst`` and convert it to markdown: turn the parts under section into ``---``, update links to just be the links, and whatever else is necessary.
+
+   + include anything else that might be pertinent, like a link to the commits between the latest and current release.
 
 * announce on gitter

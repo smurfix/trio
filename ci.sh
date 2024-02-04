@@ -2,13 +2,15 @@
 
 set -ex -o pipefail
 
+# disable warnings about pyright being out of date
+# used in test_exports and in check.sh
+export PYRIGHT_PYTHON_IGNORE_WARNINGS=1
+
 # Log some general info about the environment
+echo "::group::Environment"
 uname -a
 env | sort
-
-if [ "$JOB_NAME" = "" ]; then
-    JOB_NAME="${TRAVIS_OS_NAME}-${TRAVIS_PYTHON_VERSION:-unknown}"
-fi
+echo "::endgroup::"
 
 # Curl's built-in retry system is not very robust; it gives up on lots of
 # network errors that we want to retry on. Wget might work better, but it's
@@ -27,57 +29,35 @@ function curl-harder() {
 }
 
 ################################################################
-# Bootstrap python environment, if necessary
-################################################################
-
-### PyPy nightly ###
-
-if [ "$PYPY_NIGHTLY_BRANCH" != "" ]; then
-    JOB_NAME="pypy_nightly_${PYPY_NIGHTLY_BRANCH}"
-    curl-harder -o pypy.tar.bz2 http://buildbot.pypy.org/nightly/${PYPY_NIGHTLY_BRANCH}/pypy-c-jit-latest-linux64.tar.bz2
-    if [ ! -s pypy.tar.bz2 ]; then
-        # We know:
-        # - curl succeeded (200 response code)
-        # - nonetheless, pypy.tar.bz2 does not exist, or contains no data
-        # This isn't going to work, and the failure is not informative of
-        # anything involving Trio.
-        ls -l
-        echo "PyPy3 nightly build failed to download – something is wrong on their end."
-        echo "Skipping testing against the nightly build for right now."
-        exit 0
-    fi
-    tar xaf pypy.tar.bz2
-    # something like "pypy-c-jit-89963-748aa3022295-linux64"
-    PYPY_DIR=$(echo pypy-c-jit-*)
-    PYTHON_EXE=$PYPY_DIR/bin/pypy3
-
-    if ! ($PYTHON_EXE -m ensurepip \
-              && $PYTHON_EXE -m pip install virtualenv \
-              && $PYTHON_EXE -m virtualenv testenv); then
-        echo "pypy nightly is broken; skipping tests"
-        exit 0
-    fi
-    source testenv/bin/activate
-fi
-
-################################################################
 # We have a Python environment!
 ################################################################
 
-python -c "import sys, struct, ssl; print('#' * 70); print('python:', sys.version); print('version_info:', sys.version_info); print('bits:', struct.calcsize('P') * 8); print('openssl:', ssl.OPENSSL_VERSION, ssl.OPENSSL_VERSION_INFO); print('#' * 70)"
+echo "::group::Versions"
+python -c "import sys, struct, ssl; print('python:', sys.version); print('version_info:', sys.version_info); print('bits:', struct.calcsize('P') * 8); print('openssl:', ssl.OPENSSL_VERSION, ssl.OPENSSL_VERSION_INFO)"
+echo "::endgroup::"
 
-python -m pip install -U pip setuptools wheel
+echo "::group::Install dependencies"
+python -m pip install -U pip build
 python -m pip --version
 
-python setup.py sdist --formats=zip
-python -m pip install dist/*.zip
+python -m build
+python -m pip install dist/*.whl
 
 if [ "$CHECK_FORMATTING" = "1" ]; then
     python -m pip install -r test-requirements.txt
+    echo "::endgroup::"
     source check.sh
 else
     # Actual tests
-    python -m pip install -r test-requirements.txt
+    # expands to 0 != 1 if NO_TEST_REQUIREMENTS is not set, if set the `-0` has no effect
+    # https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_06_02
+    if [ ${NO_TEST_REQUIREMENTS-0} == 1 ]; then
+        python -m pip install pytest coverage
+        flags="--skip-optional-imports"
+    else
+        python -m pip install -r test-requirements.txt
+        flags=""
+    fi
 
     # So we can run the test for our apport/excepthook interaction working
     if [ -e /etc/lsb-release ] && grep -q Ubuntu /etc/lsb-release; then
@@ -115,7 +95,7 @@ else
         # when installing, and then running 'certmgr.msc' and exporting the
         # certificate. See:
         #    http://www.migee.com/2010/09/24/solution-for-unattendedsilent-installs-and-would-you-like-to-install-this-device-software/
-        certutil -addstore "TrustedPublisher" .github/workflows/astrill-codesigning-cert.cer
+        certutil -addstore "TrustedPublisher" src/trio/_tests/astrill-codesigning-cert.cer
         # Double-slashes are how you tell windows-bash that you want a single
         # slash, and don't treat this as a unix-style filename that needs to
         # be replaced by a windows-style filename.
@@ -127,6 +107,9 @@ else
         done
         netsh winsock show catalog
     fi
+    echo "::endgroup::"
+
+    echo "::group::Setup for tests"
 
     # We run the tests from inside an empty directory, to make sure Python
     # doesn't pick up any .py files from our working dir. Might have been
@@ -136,16 +119,26 @@ else
 
     INSTALLDIR=$(python -c "import os, trio; print(os.path.dirname(trio.__file__))")
     cp ../pyproject.toml $INSTALLDIR
-    # We have to copy .coveragerc into this directory, rather than passing
-    # --cov-config=../.coveragerc to pytest, because codecov.sh will run
-    # 'coverage xml' to generate the report that it uses, and that will only
-    # apply the ignore patterns in the current directory's .coveragerc.
-    cp ../.coveragerc .
-    if pytest -r a --junitxml=../test-results.xml --run-slow ${INSTALLDIR} --cov="$INSTALLDIR" --verbose; then
+
+    # get mypy tests a nice cache
+    MYPYPATH=".." mypy --config-file= --cache-dir=./.mypy_cache -c "import trio" >/dev/null 2>/dev/null || true
+
+    # support subprocess spawning with coverage.py
+    echo "import coverage; coverage.process_startup()" | tee -a "$INSTALLDIR/../sitecustomize.py"
+
+    echo "::endgroup::"
+    echo "::group:: Run Tests"
+    if COVERAGE_PROCESS_START=$(pwd)/../pyproject.toml coverage run --rcfile=../pyproject.toml -m pytest -ra --junitxml=../test-results.xml --run-slow ${INSTALLDIR} --verbose --durations=10 $flags; then
         PASSED=true
     else
         PASSED=false
     fi
+    echo "::endgroup::"
+    echo "::group::Coverage"
+
+    coverage combine --rcfile ../pyproject.toml
+    coverage report -m --rcfile ../pyproject.toml
+    coverage xml --rcfile ../pyproject.toml
 
     # Remove the LSP again; again we want to do this ASAP to avoid
     # accidentally breaking other stuff.
@@ -153,13 +146,6 @@ else
         netsh winsock reset
     fi
 
-    # The codecov docs recommend something like 'bash <(curl ...)' to pipe the
-    # script directly into bash as its being downloaded. But, the codecov
-    # server is flaky, so we instead save to a temp file with retries, and
-    # wait until we've successfully fetched the whole script before trying to
-    # run it.
-    curl-harder -o codecov.sh https://codecov.io/bash
-    bash codecov.sh -n "${JOB_NAME}"
-
+    echo "::endgroup::"
     $PASSED
 fi
