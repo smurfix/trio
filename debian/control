@@ -9,6 +9,7 @@ Build-Depends: dh-python, python3-setuptools, python3-all, debhelper (>= 9),
   python3-outcome (>= 1.0.1),
   python3-pytest,
   python3-pytest-runner,
+  python3-sniffio (>= 1.3),
 Standards-Version: 3.9.6
 Homepage: https://github.com/python-trio/trio
 
@@ -19,6 +20,7 @@ Depends: ${misc:Depends}, ${python3:Depends},
   python3-attr (>= 19),
   python3-contextvars | python3 (>> 3.7),
   python3-outcome (>= 1.0.1),
+  python3-sniffio (>= 1.3),
 Description: Async/await-native I/O library for humans and snake people
  The Trio project's goal is to produce a production-quality, permissively
  licensed async/await-native I/O library for Python. Like all async
