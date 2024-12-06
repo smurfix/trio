@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import partial
 from typing import TYPE_CHECKING, Any, NoReturn
 
-import attr
+import attrs
 import pytest
 
 import trio
@@ -43,13 +43,13 @@ async def echo_handler(stream: Stream) -> None:
 
 # Resolver that always returns the given sockaddr, no matter what host/port
 # you ask for.
-@attr.s
+@attrs.define(slots=False)
 class FakeHostnameResolver(trio.abc.HostnameResolver):
-    sockaddr: tuple[str, int] | tuple[str, int, int, int] = attr.ib()
+    sockaddr: tuple[str, int] | tuple[str, int, int, int]
 
     async def getaddrinfo(
         self,
-        host: bytes | str | None,
+        host: bytes | None,
         port: bytes | str | int | None,
         family: int = 0,
         type: int = 0,
@@ -82,8 +82,12 @@ async def test_open_ssl_over_tcp_stream_and_everything_else(
         res: list[SSLListener[SocketListener]] = (  # type: ignore[type-var]
             await nursery.start(
                 partial(
-                    serve_ssl_over_tcp, echo_handler, 0, SERVER_CTX, host="127.0.0.1"
-                )
+                    serve_ssl_over_tcp,
+                    echo_handler,
+                    0,
+                    SERVER_CTX,
+                    host="127.0.0.1",
+                ),
             )
         )
         (listener,) = res
@@ -105,7 +109,9 @@ async def test_open_ssl_over_tcp_stream_and_everything_else(
             # We have the trust but not the hostname
             # (checks custom ssl_context + hostname checking)
             stream = await open_ssl_over_tcp_stream(
-                "xyzzy.example.org", 80, ssl_context=client_ctx
+                "xyzzy.example.org",
+                80,
+                ssl_context=client_ctx,
             )
             async with stream:
                 with pytest.raises(trio.BrokenResourceError):
@@ -113,7 +119,9 @@ async def test_open_ssl_over_tcp_stream_and_everything_else(
 
             # This one should work!
             stream = await open_ssl_over_tcp_stream(
-                "trio-test-1.example.org", 80, ssl_context=client_ctx
+                "trio-test-1.example.org",
+                80,
+                ssl_context=client_ctx,
             )
             async with stream:
                 assert isinstance(stream, trio.SSLStream)
@@ -149,7 +157,10 @@ async def test_open_ssl_over_tcp_listeners() -> None:
         assert not listener._https_compatible
 
     (listener,) = await open_ssl_over_tcp_listeners(
-        0, SERVER_CTX, host="127.0.0.1", https_compatible=True
+        0,
+        SERVER_CTX,
+        host="127.0.0.1",
+        https_compatible=True,
     )
     async with listener:
         assert listener._https_compatible

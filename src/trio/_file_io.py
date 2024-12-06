@@ -355,8 +355,7 @@ async def open_file(
     newline: str | None = None,
     closefd: bool = True,
     opener: _Opener | None = None,
-) -> AsyncIOWrapper[io.TextIOWrapper]:
-    ...
+) -> AsyncIOWrapper[io.TextIOWrapper]: ...
 
 
 @overload
@@ -369,8 +368,7 @@ async def open_file(
     newline: None = None,
     closefd: bool = True,
     opener: _Opener | None = None,
-) -> AsyncIOWrapper[io.FileIO]:
-    ...
+) -> AsyncIOWrapper[io.FileIO]: ...
 
 
 @overload
@@ -383,8 +381,7 @@ async def open_file(
     newline: None = None,
     closefd: bool = True,
     opener: _Opener | None = None,
-) -> AsyncIOWrapper[io.BufferedRandom]:
-    ...
+) -> AsyncIOWrapper[io.BufferedRandom]: ...
 
 
 @overload
@@ -397,8 +394,7 @@ async def open_file(
     newline: None = None,
     closefd: bool = True,
     opener: _Opener | None = None,
-) -> AsyncIOWrapper[io.BufferedWriter]:
-    ...
+) -> AsyncIOWrapper[io.BufferedWriter]: ...
 
 
 @overload
@@ -411,8 +407,7 @@ async def open_file(
     newline: None = None,
     closefd: bool = True,
     opener: _Opener | None = None,
-) -> AsyncIOWrapper[io.BufferedReader]:
-    ...
+) -> AsyncIOWrapper[io.BufferedReader]: ...
 
 
 @overload
@@ -425,8 +420,7 @@ async def open_file(
     newline: None = None,
     closefd: bool = True,
     opener: _Opener | None = None,
-) -> AsyncIOWrapper[BinaryIO]:
-    ...
+) -> AsyncIOWrapper[BinaryIO]: ...
 
 
 @overload
@@ -439,8 +433,7 @@ async def open_file(  # type: ignore[misc]  # Any usage matches builtins.open().
     newline: str | None = None,
     closefd: bool = True,
     opener: _Opener | None = None,
-) -> AsyncIOWrapper[IO[Any]]:
-    ...
+) -> AsyncIOWrapper[IO[Any]]: ...
 
 
 async def open_file(
@@ -472,8 +465,16 @@ async def open_file(
     """
     _file = wrap_file(
         await trio.to_thread.run_sync(
-            io.open, file, mode, buffering, encoding, errors, newline, closefd, opener
-        )
+            io.open,
+            file,
+            mode,
+            buffering,
+            encoding,
+            errors,
+            newline,
+            closefd,
+            opener,
+        ),
     )
     return _file
 
@@ -502,7 +503,7 @@ def wrap_file(file: FileT) -> AsyncIOWrapper[FileT]:
     if not (has("close") and (has("read") or has("write"))):
         raise TypeError(
             f"{file} does not implement required duck-file methods: "
-            "close and (read or write)"
+            "close and (read or write)",
         )
 
     return AsyncIOWrapper(file)

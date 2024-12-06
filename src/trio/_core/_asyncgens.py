@@ -6,7 +6,7 @@ import warnings
 import weakref
 from typing import TYPE_CHECKING, NoReturn
 
-import attr
+import attrs
 
 from .. import _core
 from .._util import name_asyncgen
@@ -26,7 +26,7 @@ else:
     _ASYNC_GEN_SET = set
 
 
-@attr.s(eq=False, slots=True)
+@attrs.define(eq=False)
 class AsyncGenerators:
     # Async generators are added to this set when first iterated. Any
     # left after the main task exits will be closed before trio.run()
@@ -35,14 +35,14 @@ class AsyncGenerators:
     # asyncgens after the system nursery has been closed, it's a
     # regular set so we don't have to deal with GC firing at
     # unexpected times.
-    alive: _WEAK_ASYNC_GEN_SET | _ASYNC_GEN_SET = attr.ib(factory=_WEAK_ASYNC_GEN_SET)
+    alive: _WEAK_ASYNC_GEN_SET | _ASYNC_GEN_SET = attrs.Factory(_WEAK_ASYNC_GEN_SET)
 
     # This collects async generators that get garbage collected during
     # the one-tick window between the system nursery closing and the
     # init task starting end-of-run asyncgen finalization.
-    trailing_needs_finalize: _ASYNC_GEN_SET = attr.ib(factory=_ASYNC_GEN_SET)
+    trailing_needs_finalize: _ASYNC_GEN_SET = attrs.Factory(_ASYNC_GEN_SET)
 
-    prev_hooks: sys._asyncgen_hooks = attr.ib(init=False)
+    prev_hooks: sys._asyncgen_hooks = attrs.field(init=False)
 
     def install_hooks(self, runner: _run.Runner) -> None:
         def firstiter(agen: AsyncGeneratorType[object, NoReturn]) -> None:
@@ -60,7 +60,8 @@ class AsyncGenerators:
                     self.prev_hooks.firstiter(agen)
 
         def finalize_in_trio_context(
-            agen: AsyncGeneratorType[object, NoReturn], agen_name: str
+            agen: AsyncGeneratorType[object, NoReturn],
+            agen_name: str,
         ) -> None:
             try:
                 runner.spawn_system_task(
@@ -85,7 +86,9 @@ class AsyncGenerators:
 
             if is_ours:
                 runner.entry_queue.run_sync_soon(
-                    finalize_in_trio_context, agen, agen_name
+                    finalize_in_trio_context,
+                    agen,
+                    agen_name,
                 )
 
                 # Do this last, because it might raise an exception
@@ -123,7 +126,7 @@ class AsyncGenerators:
                         raise RuntimeError(
                             f"Non-Trio async generator {agen_name!r} awaited something "
                             "during finalization; install a finalization hook to "
-                            "support this, or wrap it in 'async with aclosing(...):'"
+                            "support this, or wrap it in 'async with aclosing(...):'",
                         )
 
         self.prev_hooks = sys.get_asyncgen_hooks()
@@ -146,7 +149,7 @@ class AsyncGenerators:
         # them was an asyncgen finalizer that snuck in under the wire.
         runner.entry_queue.run_sync_soon(runner.reschedule, runner.init_task)
         await _core.wait_task_rescheduled(
-            lambda _: _core.Abort.FAILED  # pragma: no cover
+            lambda _: _core.Abort.FAILED,  # pragma: no cover
         )
         self.alive.update(self.trailing_needs_finalize)
         self.trailing_needs_finalize.clear()
@@ -193,7 +196,9 @@ class AsyncGenerators:
         sys.set_asyncgen_hooks(*self.prev_hooks)
 
     async def _finalize_one(
-        self, agen: AsyncGeneratorType[object, NoReturn], name: object
+        self,
+        agen: AsyncGeneratorType[object, NoReturn],
+        name: object,
     ) -> None:
         try:
             # This shield ensures that finalize_asyncgen never exits

@@ -14,7 +14,7 @@ from pathlib import Path
 from textwrap import indent
 from typing import TYPE_CHECKING
 
-import attr
+import attrs
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -32,11 +32,13 @@ HEADER = """# ***********************************************************
 # *************************************************************
 from __future__ import annotations
 
+import sys
+
 from ._ki import LOCALS_KEY_KI_PROTECTION_ENABLED
 from ._run import GLOBAL_RUN_CONTEXT
 """
 
-TEMPLATE = """locals()[LOCALS_KEY_KI_PROTECTION_ENABLED] = True
+TEMPLATE = """sys._getframe().f_locals[LOCALS_KEY_KI_PROTECTION_ENABLED] = True
 try:
     return{}GLOBAL_RUN_CONTEXT.{}.{}
 except AttributeError:
@@ -44,21 +46,19 @@ except AttributeError:
 """
 
 
-@attr.define
+@attrs.define
 class File:
     path: Path
     modname: str
-    platform: str = attr.field(default="", kw_only=True)
-    imports: str = attr.field(default="", kw_only=True)
+    platform: str = attrs.field(default="", kw_only=True)
+    imports: str = attrs.field(default="", kw_only=True)
 
 
 def is_function(node: ast.AST) -> TypeGuard[ast.FunctionDef | ast.AsyncFunctionDef]:
     """Check if the AST node is either a function
     or an async function
     """
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        return True
-    return False
+    return isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
 
 
 def is_public(node: ast.AST) -> TypeGuard[ast.FunctionDef | ast.AsyncFunctionDef]:
@@ -91,13 +91,11 @@ def create_passthrough_args(funcdef: ast.FunctionDef | ast.AsyncFunctionDef) -> 
     Example input: ast.parse("def f(a, *, b): ...")
     Example output: "(a, b=b)"
     """
-    call_args = []
-    for arg in funcdef.args.args:
-        call_args.append(arg.arg)
+    call_args = [arg.arg for arg in funcdef.args.args]
     if funcdef.args.vararg:
         call_args.append("*" + funcdef.args.vararg.arg)
     for arg in funcdef.args.kwonlyargs:
-        call_args.append(arg.arg + "=" + arg.arg)
+        call_args.append(arg.arg + "=" + arg.arg)  # noqa: PERF401  # clarity
     if funcdef.args.kwarg:
         call_args.append("**" + funcdef.args.kwarg.arg)
     return "({})".format(", ".join(call_args))
@@ -158,7 +156,6 @@ def run_ruff(file: File, source: str) -> tuple[bool, str]:
             "check",
             "--fix",
             "--unsafe-fixes",
-            "--output-format=text",
             "--stdin-filename",
             file.path,
             "-",
@@ -194,6 +191,11 @@ def run_linters(file: File, source: str) -> str:
         print(response)
         sys.exit(1)
 
+    success, response = run_black(file, response)
+    if not success:
+        print(response)
+        sys.exit(1)
+
     return response
 
 
@@ -214,7 +216,7 @@ def gen_public_wrappers_source(file: File) -> str:
         if "import sys" not in file.imports:  # pragma: no cover
             header.append("import sys\n")
         header.append(
-            f'\nassert not TYPE_CHECKING or sys.platform=="{file.platform}"\n'
+            f'\nassert not TYPE_CHECKING or sys.platform=="{file.platform}"\n',
         )
 
     generated = ["".join(header)]
@@ -292,27 +294,34 @@ def process(files: Iterable[File], *, do_test: bool) -> None:
         dirname, basename = os.path.split(file.path)
         new_path = os.path.join(dirname, PREFIX + basename)
         new_files[new_path] = new_source
+    matches_disk = matches_disk_files(new_files)
     if do_test:
-        if not matches_disk_files(new_files):
+        if not matches_disk:
             print("Generated sources are outdated. Please regenerate.")
             sys.exit(1)
         else:
             print("Generated sources are up to date.")
     else:
         for new_path, new_source in new_files.items():
-            with open(new_path, "w", encoding="utf-8") as f:
+            with open(new_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(new_source)
         print("Regenerated sources successfully.")
+        if not matches_disk:
+            # With pre-commit integration, show that we edited files.
+            sys.exit(1)
 
 
 # This is in fact run in CI, but only in the formatting check job, which
 # doesn't collect coverage.
 def main() -> None:  # pragma: no cover
     parser = argparse.ArgumentParser(
-        description="Generate python code for public api wrappers"
+        description="Generate python code for public api wrappers",
     )
     parser.add_argument(
-        "--test", "-t", action="store_true", help="test if code is still up to date"
+        "--test",
+        "-t",
+        action="store_true",
+        help="test if code is still up to date",
     )
     parsed_args = parser.parse_args()
 

@@ -26,14 +26,13 @@ try:
     import tputil
 except ImportError:
     # ctypes it is
-    import ctypes
-
     # How to handle refcounting? I don't want to use ctypes.py_object because
     # I don't understand or trust it, and I don't want to use
     # ctypes.pythonapi.Py_{Inc,Dec}Ref because we might clash with user code
     # that also tries to use them but with different types. So private _ctypes
     # APIs it is!
     import _ctypes
+    import ctypes
 
     class CTraceback(ctypes.Structure):
         _fields_: ClassVar = [
@@ -105,7 +104,8 @@ else:
             return operation.delegate()  # Delegate is reverting to original behaviour
 
         return cast(
-            TracebackType, tputil.make_proxy(controller, type(base_tb), base_tb)
+            TracebackType,
+            tputil.make_proxy(controller, type(base_tb), base_tb),
         )  # Returns proxy to traceback
 
 
@@ -113,7 +113,8 @@ else:
 # `strict_exception_groups=False`. Once that is retired this function and its helper can
 # be removed as well.
 def concat_tb(
-    head: TracebackType | None, tail: TracebackType | None
+    head: TracebackType | None,
+    tail: TracebackType | None,
 ) -> TracebackType | None:
     # We have to use an iterative algorithm here, because in the worst case
     # this might be a RecursionError stack that is by definition too deep to

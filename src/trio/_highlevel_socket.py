@@ -76,7 +76,7 @@ class SocketStream(HalfCloseableStream):
 
         self.socket = socket
         self._send_conflict_detector = ConflictDetector(
-            "another task is currently sending data on this SocketStream"
+            "another task is currently sending data on this SocketStream",
         )
 
         # Socket defaults:
@@ -147,12 +147,10 @@ class SocketStream(HalfCloseableStream):
     # __aenter__, __aexit__ inherited from HalfCloseableStream are OK
 
     @overload
-    def setsockopt(self, level: int, option: int, value: int | Buffer) -> None:
-        ...
+    def setsockopt(self, level: int, option: int, value: int | Buffer) -> None: ...
 
     @overload
-    def setsockopt(self, level: int, option: int, value: None, length: int) -> None:
-        ...
+    def setsockopt(self, level: int, option: int, value: None, length: int) -> None: ...
 
     def setsockopt(
         self,
@@ -169,22 +167,20 @@ class SocketStream(HalfCloseableStream):
         if length is None:
             if value is None:
                 raise TypeError(
-                    "invalid value for argument 'value', must not be None when specifying length"
+                    "invalid value for argument 'value', must not be None when specifying length",
                 )
             return self.socket.setsockopt(level, option, value)
         if value is not None:
             raise TypeError(
-                f"invalid value for argument 'value': {value!r}, must be None when specifying optlen"
+                f"invalid value for argument 'value': {value!r}, must be None when specifying optlen",
             )
         return self.socket.setsockopt(level, option, value, length)
 
     @overload
-    def getsockopt(self, level: int, option: int) -> int:
-        ...
+    def getsockopt(self, level: int, option: int) -> int: ...
 
     @overload
-    def getsockopt(self, level: int, option: int, buffersize: int) -> bytes:
-        ...
+    def getsockopt(self, level: int, option: int, buffersize: int) -> bytes: ...
 
     def getsockopt(self, level: int, option: int, buffersize: int = 0) -> int | bytes:
         """Check the current value of an option on the underlying socket.

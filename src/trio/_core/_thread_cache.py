@@ -23,7 +23,9 @@ def _to_os_thread_name(name: str) -> bytes:
 # called once on import
 def get_os_thread_name_func() -> Callable[[int | None, str], None] | None:
     def namefunc(
-        setname: Callable[[int, bytes], int], ident: int | None, name: str
+        setname: Callable[[int, bytes], int],
+        ident: int | None,
+        name: str,
     ) -> None:
         # Thread.ident is None "if it has not been started". Unclear if that can happen
         # with current usage.
@@ -33,7 +35,9 @@ def get_os_thread_name_func() -> Callable[[int | None, str], None] | None:
     # namefunc on Mac also takes an ident, even if pthread_setname_np doesn't/can't use it
     # so the caller don't need to care about platform.
     def darwin_namefunc(
-        setname: Callable[[bytes], int], ident: int | None, name: str
+        setname: Callable[[bytes], int],
+        ident: int | None,
+        name: str,
     ) -> None:
         # I don't know if Mac can rename threads that hasn't been started, but default
         # to no to be on the safe side.
@@ -41,10 +45,15 @@ def get_os_thread_name_func() -> Callable[[int | None, str], None] | None:
             setname(_to_os_thread_name(name))
 
     # find the pthread library
-    # this will fail on windows
+    # this will fail on windows and musl
     libpthread_path = ctypes.util.find_library("pthread")
     if not libpthread_path:
-        return None
+        # musl includes pthread functions directly in libc.so
+        # (but note that find_library("c") does not work on musl,
+        #  see: https://github.com/python/cpython/issues/65821)
+        # so try that library instead
+        # if it doesn't exist, CDLL() will fail below
+        libpthread_path = "libc.so"
 
     # Sometimes windows can find the path, but gives a permission error when
     # accessing it. Catching a wider exception in case of more esoteric errors.
@@ -118,11 +127,14 @@ name_counter = count()
 
 class WorkerThread(Generic[RetT]):
     def __init__(self, thread_cache: ThreadCache) -> None:
-        self._job: tuple[
-            Callable[[], RetT],
-            Callable[[outcome.Outcome[RetT]], object],
-            str | None,
-        ] | None = None
+        self._job: (
+            tuple[
+                Callable[[], RetT],
+                Callable[[outcome.Outcome[RetT]], object],
+                str | None,
+            ]
+            | None
+        ) = None
         self._thread_cache = thread_cache
         # This Lock is used in an unconventional way.
         #

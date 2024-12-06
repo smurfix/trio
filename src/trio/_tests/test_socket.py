@@ -6,10 +6,11 @@ import os
 import socket as stdlib_socket
 import sys
 import tempfile
+from pathlib import Path
 from socket import AddressFamily, SocketKind
 from typing import TYPE_CHECKING, Any, Callable, List, Tuple, Union
 
-import attr
+import attrs
 import pytest
 
 from .. import _core, socket as tsocket
@@ -55,7 +56,10 @@ class MonkeypatchedGAI:
         return frozenbound
 
     def set(
-        self, response: GetAddrInfoResponse | str, *args: Any, **kwargs: Any
+        self,
+        response: GetAddrInfoResponse | str,
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
         self._responses[self._frozenbind(*args, **kwargs)] = response
 
@@ -134,8 +138,8 @@ async def test_getaddrinfo(monkeygai: MonkeypatchedGAI) -> None:
             tuple[str, int] | tuple[str, int, int] | tuple[str, int, int, int],
         ]:
             # (family, type, proto, canonname, sockaddr)
-            family, type, proto, canonname, sockaddr = gai_tup
-            return (family, type, sockaddr)
+            family, type_, proto, canonname, sockaddr = gai_tup
+            return (family, type_, sockaddr)
 
         def filtered(
             gai_list: GetAddrInfoResponse,
@@ -321,10 +325,11 @@ async def test_sniff_sockopts() -> None:
     from socket import AF_INET, AF_INET6, SOCK_DGRAM, SOCK_STREAM
 
     # generate the combinations of families/types we're testing:
-    sockets = []
-    for family in [AF_INET, AF_INET6]:
-        for type in [SOCK_DGRAM, SOCK_STREAM]:
-            sockets.append(stdlib_socket.socket(family, type))
+    sockets = [
+        stdlib_socket.socket(family, type_)
+        for family in [AF_INET, AF_INET6]
+        for type_ in [SOCK_DGRAM, SOCK_STREAM]
+    ]
     for socket in sockets:
         # regular Trio socket constructor
         tsocket_socket = tsocket.socket(fileno=socket.fileno())
@@ -471,7 +476,8 @@ async def test_SocketType_shutdown() -> None:
     ],
 )
 async def test_SocketType_simple_server(
-    address: str, socket_type: AddressFamily
+    address: str,
+    socket_type: AddressFamily,
 ) -> None:
     # listen, bind, accept, connect, getpeername, getsockname
     listener = tsocket.socket(socket_type)
@@ -512,12 +518,12 @@ def gai_without_v4mapped_is_buggy() -> bool:  # pragma: no cover
         return True
 
 
-@attr.s
+@attrs.define(slots=False)
 class Addresses:
-    bind_all: str = attr.ib()
-    localhost: str = attr.ib()
-    arbitrary: str = attr.ib()
-    broadcast: str = attr.ib()
+    bind_all: str
+    localhost: str
+    arbitrary: str
+    broadcast: str
 
 
 # Direct thorough tests of the implicit resolver helpers
@@ -555,7 +561,8 @@ async def test_SocketType_resolve(socket_type: AddressFamily, addrs: Addresses) 
         return addr
 
     def assert_eq(
-        actual: tuple[str | int, ...], expected: tuple[str | int, ...]
+        actual: tuple[str | int, ...],
+        expected: tuple[str | int, ...],
     ) -> None:
         assert pad(expected) == pad(actual)
 
@@ -580,12 +587,14 @@ async def test_SocketType_resolve(socket_type: AddressFamily, addrs: Addresses) 
         for local in [False, True]:
 
             async def res(
-                args: tuple[str, int]
-                | tuple[str, int, int]
-                | tuple[str, int, int, int]
-                | tuple[str, str]
-                | tuple[str, str, int]
-                | tuple[str, str, int, int]
+                args: (
+                    tuple[str, int]
+                    | tuple[str, int, int]
+                    | tuple[str, int, int, int]
+                    | tuple[str, str]
+                    | tuple[str, str, int]
+                    | tuple[str, str, int, int]
+                ),
             ) -> Any:
                 return await sock._resolve_address_nocp(
                     args,
@@ -624,8 +633,8 @@ async def test_SocketType_resolve(socket_type: AddressFamily, addrs: Addresses) 
                 sock.setsockopt(tsocket.IPPROTO_IPV6, tsocket.IPV6_V6ONLY, True)
                 with pytest.raises(tsocket.gaierror) as excinfo:
                     await res(("1.2.3.4", 80))
-                # Windows, macOS
-                expected_errnos = {tsocket.EAI_NONAME}
+                # Windows, macOS, musl/Linux
+                expected_errnos = {tsocket.EAI_NONAME, tsocket.EAI_NODATA}
                 # Linux
                 if hasattr(tsocket, "EAI_ADDRFAMILY"):
                     expected_errnos.add(tsocket.EAI_ADDRFAMILY)
@@ -636,7 +645,8 @@ async def test_SocketType_resolve(socket_type: AddressFamily, addrs: Addresses) 
             # smoke test the basic functionality...
             try:
                 netlink_sock = tsocket.socket(
-                    family=tsocket.AF_NETLINK, type=tsocket.SOCK_DGRAM
+                    family=tsocket.AF_NETLINK,
+                    type=tsocket.SOCK_DGRAM,
                 )
             except (AttributeError, OSError):
                 pass
@@ -653,7 +663,7 @@ async def test_SocketType_resolve(socket_type: AddressFamily, addrs: Addresses) 
                 await res("1.2.3.4")  # type: ignore[arg-type]
             with pytest.raises(ValueError, match=address):
                 await res(("1.2.3.4",))  # type: ignore[arg-type]
-            with pytest.raises(  # noqa: PT012
+            with pytest.raises(
                 ValueError,
                 match=address,
             ):
@@ -790,7 +800,9 @@ async def test_SocketType_connect_paths() -> None:
 
                     cancel_scope.cancel()
                     sock._sock = stdlib_socket.fromfd(
-                        self.detach(), self.family, self.type
+                        self.detach(),
+                        self.family,
+                        self.type,
                     )
                     sock._sock.connect(*args, **kwargs)
                     # If connect *doesn't* raise, then pretend it did
@@ -839,7 +851,9 @@ async def test_resolve_address_exception_in_connect_closes_socket() -> None:
         with tsocket.socket() as sock:
 
             async def _resolve_address_nocp(
-                self: Any, *args: Any, **kwargs: Any
+                self: Any,
+                *args: Any,
+                **kwargs: Any,
             ) -> None:
                 cancel_scope.cancel()
                 await _core.checkpoint()
@@ -977,12 +991,20 @@ async def test_custom_hostname_resolver(monkeygai: MonkeypatchedGAI) -> None:
     # This intentionally breaks the signatures used in HostnameResolver
     class CustomResolver:
         async def getaddrinfo(
-            self, host: str, port: str, family: int, type: int, proto: int, flags: int
+            self,
+            host: str,
+            port: str,
+            family: int,
+            type: int,
+            proto: int,
+            flags: int,
         ) -> tuple[str, str, str, int, int, int, int]:
             return ("custom_gai", host, port, family, type, proto, flags)
 
         async def getnameinfo(
-            self, sockaddr: tuple[str, int] | tuple[str, int, int, int], flags: int
+            self,
+            sockaddr: tuple[str, int] | tuple[str, int, int, int],
+            flags: int,
         ) -> tuple[str, tuple[str, int] | tuple[str, int, int, int], int]:
             return ("custom_gni", sockaddr, flags)
 
@@ -1029,7 +1051,10 @@ async def test_custom_hostname_resolver(monkeygai: MonkeypatchedGAI) -> None:
 async def test_custom_socket_factory() -> None:
     class CustomSocketFactory:
         def socket(
-            self, family: AddressFamily, type: SocketKind, proto: int
+            self,
+            family: AddressFamily,
+            type: SocketKind,
+            proto: int,
         ) -> tuple[str, AddressFamily, SocketKind, int]:
             return ("hi", family, type, proto)
 
@@ -1065,7 +1090,7 @@ async def test_unix_domain_socket() -> None:
     # Bind has a special branch to use a thread, since it has to do filesystem
     # traversal. Maybe connect should too? Not sure.
 
-    async def check_AF_UNIX(path: str | bytes) -> None:
+    async def check_AF_UNIX(path: str | bytes | os.PathLike[str]) -> None:
         with tsocket.socket(family=tsocket.AF_UNIX) as lsock:
             await lsock.bind(path)
             lsock.listen(10)
@@ -1079,8 +1104,11 @@ async def test_unix_domain_socket() -> None:
     # Can't use tmpdir fixture, because we can exceed the maximum AF_UNIX path
     # length on macOS.
     with tempfile.TemporaryDirectory() as tmpdir:
-        path = f"{tmpdir}/sock"
-        await check_AF_UNIX(path)
+        # Test passing various supported types as path
+        # Must use different filenames to prevent "address already in use"
+        await check_AF_UNIX(f"{tmpdir}/sock")
+        await check_AF_UNIX(Path(f"{tmpdir}/sock1"))
+        await check_AF_UNIX(os.fsencode(f"{tmpdir}/sock2"))
 
     try:
         cookie = os.urandom(20).hex().encode("ascii")
