@@ -22,9 +22,11 @@ import collections.abc
 import glob
 import os
 import sys
-import types
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
+
+from sphinx.util.inventory import _InventoryItem
+from sphinx.util.logging import getLogger
 
 if TYPE_CHECKING:
     from sphinx.application import Sphinx
@@ -32,8 +34,6 @@ if TYPE_CHECKING:
 
 # For our local_customization module
 sys.path.insert(0, os.path.abspath("."))
-# For trio itself
-sys.path.insert(0, os.path.abspath("../../src"))
 
 # Enable reloading with `typing.TYPE_CHECKING` being True
 os.environ["SPHINX_AUTODOC_RELOAD_MODULES"] = "1"
@@ -152,16 +152,6 @@ def autodoc_process_signature(
     return_annotation: str,
 ) -> tuple[str, str]:
     """Modify found signatures to fix various issues."""
-    if name == "trio.testing._raises_group._ExceptionInfo.type":
-        # This has the type "type[E]", which gets resolved into the property itself.
-        # That means Sphinx can't resolve it. Fix the issue by overwriting with a fully-qualified
-        # name.
-        assert isinstance(obj, property), obj
-        assert isinstance(obj.fget, types.FunctionType), obj.fget
-        assert (
-            obj.fget.__annotations__["return"] == "type[MatchE]"
-        ), obj.fget.__annotations__
-        obj.fget.__annotations__["return"] = "type[~trio.testing._raises_group.MatchE]"
     if signature is not None:
         signature = signature.replace("~_contextvars.Context", "~contextvars.Context")
         if name == "trio.lowlevel.RunVar":  # Typevar is not useful here.
@@ -170,16 +160,6 @@ def autodoc_process_signature(
             # Strip the type from the union, make it look like = ...
             signature = signature.replace(" | type[trio._core._local._NoValue]", "")
             signature = signature.replace("<class 'trio._core._local._NoValue'>", "...")
-        if name in ("trio.testing.RaisesGroup", "trio.testing.Matcher") and (
-            "+E" in signature or "+MatchE" in signature
-        ):
-            # This typevar being covariant isn't handled correctly in some cases, strip the +
-            # and insert the fully-qualified name.
-            signature = signature.replace("+E", "~trio.testing._raises_group.E")
-            signature = signature.replace(
-                "+MatchE",
-                "~trio.testing._raises_group.MatchE",
-            )
         if "DTLS" in name:
             signature = signature.replace("SSL.Context", "OpenSSL.SSL.Context")
         # Don't specify PathLike[str] | PathLike[bytes], this is just for humans.
@@ -188,18 +168,55 @@ def autodoc_process_signature(
     return signature, return_annotation
 
 
-# XX hack the RTD theme until
-#   https://github.com/rtfd/sphinx_rtd_theme/pull/382
-# is shipped (should be in the release after 0.2.4)
-# ...note that this has since grown to contain a bunch of other CSS hacks too
-# though.
+# currently undocumented things
+logger = getLogger("trio")
+UNDOCUMENTED = {
+    "trio.MemorySendChannel",
+    "trio.MemoryReceiveChannel",
+    "trio.MemoryChannelStatistics",
+    "trio.SocketStream.aclose",
+    "trio.SocketStream.receive_some",
+    "trio.SocketStream.send_all",
+    "trio.SocketStream.send_eof",
+    "trio.SocketStream.wait_send_all_might_not_block",
+    "trio._subprocess.HasFileno.fileno",
+    "trio.lowlevel.ParkingLot.broken_by",
+}
+
+
+def autodoc_process_docstring(
+    app: Sphinx,
+    what: str,
+    name: str,
+    obj: object,
+    options: object,
+    lines: list[str],
+) -> None:
+    if not lines:
+        # TODO: document these and remove them from here
+        if name in UNDOCUMENTED:
+            return
+
+        logger.warning(f"{name} has no docstring")
+    else:
+        if name in UNDOCUMENTED:
+            logger.warning(
+                f"outdated list of undocumented things in docs/source/conf.py: {name!r} has a docstring"
+            )
+
+
 def setup(app: Sphinx) -> None:
-    app.add_css_file("hackrtd.css")
+    # Add our custom styling to make our documentation better!
+    app.add_css_file("styles.css")
     app.connect("autodoc-process-signature", autodoc_process_signature)
+    app.connect("autodoc-process-docstring", autodoc_process_docstring)
+
     # After Intersphinx runs, add additional mappings.
     app.connect("builder-inited", add_intersphinx, priority=1000)
     app.connect("source-read", on_read_source)
 
+
+html_context = {"current_version": os.environ.get("READTHEDOCS_VERSION_NAME")}
 
 # -- General configuration ------------------------------------------------
 
@@ -217,7 +234,6 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinxcontrib_trio",
     "sphinxcontrib.jquery",
-    "hoverxref.extension",
     "sphinx_codeautolink",
     "local_customization",
     "typevars",
@@ -230,24 +246,6 @@ intersphinx_mapping = {
     "sniffio": ("https://sniffio.readthedocs.io/en/latest/", None),
     "trio-util": ("https://trio-util.readthedocs.io/en/latest/", None),
     "flake8-async": ("https://flake8-async.readthedocs.io/en/latest/", None),
-}
-
-# See https://sphinx-hoverxref.readthedocs.io/en/latest/configuration.html
-hoverxref_auto_ref = True
-hoverxref_domains = ["py"]
-# Set the default style (tooltip) for all types to silence logging.
-# See https://github.com/readthedocs/sphinx-hoverxref/issues/211
-hoverxref_role_types = {
-    "attr": "tooltip",
-    "class": "tooltip",
-    "const": "tooltip",
-    "exc": "tooltip",
-    "func": "tooltip",
-    "meth": "tooltip",
-    "mod": "tooltip",
-    "obj": "tooltip",
-    "ref": "tooltip",
-    "data": "tooltip",
 }
 
 # See https://sphinx-codeautolink.readthedocs.io/en/latest/reference.html#configuration
@@ -282,11 +280,11 @@ def add_intersphinx(app: Sphinx) -> None:
         assert isinstance(inventory, dict)
         inventory = cast("Inventory", inventory)
 
-        inventory[f"py:{reftype}"][f"{target}"] = (
-            "Python",
-            version,
-            f"https://docs.python.org/{url_version}/library/{library}.html/{obj}",
-            "-",
+        inventory[f"py:{reftype}"][f"{target}"] = _InventoryItem(
+            project_name="Python",
+            project_version=version,
+            uri=f"https://docs.python.org/{url_version}/library/{library}.html/{obj}",
+            display_name="-",
         )
 
     # This has been removed in Py3.12, so add a link to the 3.11 version with deprecation warnings.
@@ -329,9 +327,9 @@ author = "Nathaniel J. Smith"
 # built documents.
 #
 # The short X.Y version.
-import trio
+import importlib.metadata
 
-version = trio.__version__
+version = importlib.metadata.version("trio")
 # The full version, including alpha/beta/rc tags.
 release = version
 
@@ -374,10 +372,7 @@ suppress_warnings = ["epub.unknown_project_files"]
 # We have to set this ourselves, not only because it's useful for local
 # testing, but also because if we don't then RTD will throw away our
 # html_theme_options.
-import sphinx_rtd_theme
-
 html_theme = "sphinx_rtd_theme"
-html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
@@ -392,6 +387,7 @@ html_theme_options = {
     "navigation_depth": 4,
     "logo_only": True,
     "prev_next_buttons_location": "both",
+    "style_nav_header_background": "#d2e7fa",
 }
 
 # Add any paths that contain custom static files (such as style sheets) here,
