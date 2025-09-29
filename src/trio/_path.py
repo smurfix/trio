@@ -39,8 +39,18 @@ def _wraps_async(  # type: ignore[explicit-any]
 
         update_wrapper(wrapper, wrapped)
         if wrapped.__doc__:
+            module = wrapped.__module__
+            # these are exported specially from CPython's intersphinx inventory
+            module = module.replace("pathlib._local", "pathlib")
+            module = module.replace("pathlib._abc", "pathlib")
+
+            name = wrapped.__qualname__
+            name = name.replace(
+                "PathBase", "Path"
+            )  # I'm not sure why this is necessary
+
             wrapper.__doc__ = (
-                f"Like :meth:`~{wrapped.__module__}.{wrapped.__qualname__}`, but async.\n"
+                f"Like :meth:`~{module}.{name}`, but async.\n"
                 f"\n"
                 f"{cleandoc(wrapped.__doc__)}\n"
             )
@@ -183,7 +193,7 @@ class Path(pathlib.PurePath):
     ) -> AsyncIOWrapper[BinaryIO]: ...
 
     @overload
-    async def open(  # type: ignore[misc, explicit-any]  # Any usage matches builtins.open().
+    async def open(  # type: ignore[explicit-any]  # Any usage matches builtins.open().
         self,
         mode: str,
         buffering: int = -1,
@@ -246,6 +256,10 @@ class Path(pathlib.PurePath):
 
     def as_uri(self) -> str:
         return pathlib.Path.as_uri(self)
+
+
+if Path.relative_to.__doc__:  # pragma: no branch
+    Path.relative_to.__doc__ = Path.relative_to.__doc__.replace(" `..` ", " ``..`` ")
 
 
 @final

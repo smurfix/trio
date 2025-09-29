@@ -8,7 +8,13 @@ import threading
 import time
 import types
 import weakref
-from contextlib import ExitStack, contextmanager, suppress
+from contextlib import (
+    AsyncExitStack,
+    ExitStack,
+    asynccontextmanager,
+    contextmanager,
+    suppress,
+)
 from math import inf, nan
 from typing import TYPE_CHECKING, NoReturn, TypeVar
 from unittest import mock
@@ -761,7 +767,7 @@ async def test_cancel_unbound() -> None:
     assert scope.cancel_called  # never become un-cancelled
 
 
-async def test_cancel_scope_misnesting() -> None:
+async def test_cancel_scope_misnesting_1() -> None:
     outer = _core.CancelScope()
     inner = _core.CancelScope()
     with ExitStack() as stack:
@@ -771,6 +777,8 @@ async def test_cancel_scope_misnesting() -> None:
                 stack.close()
         # No further error is raised when exiting the inner context
 
+
+async def test_cancel_scope_misnesting_2() -> None:
     # If there are other tasks inside the abandoned part of the cancel tree,
     # they get cancelled when the misnesting is detected
     async def task1() -> None:
@@ -780,7 +788,10 @@ async def test_cancel_scope_misnesting() -> None:
     # Even if inside another cancel scope
     async def task2() -> None:
         with _core.CancelScope():
-            with pytest.raises(_core.Cancelled):
+            with pytest.raises(
+                _core.Cancelled,
+                match=r"^cancelled due to unknown with reason 'misnesting'$",
+            ):
                 await sleep_forever()
 
     with ExitStack() as stack:
@@ -825,6 +836,8 @@ async def test_cancel_scope_misnesting() -> None:
     )
     assert group.matches(exc_info.value.__context__)
 
+
+async def test_cancel_scope_misnesting_3() -> None:
     # Trying to exit a cancel scope from an unrelated task raises an error
     # without affecting any state
     async def task3(task_status: _core.TaskStatus[_core.CancelScope]) -> None:
@@ -839,6 +852,130 @@ async def test_cancel_scope_misnesting() -> None:
         with pytest.raises(RuntimeError, match="from unrelated"):
             scope.__exit__(None, None, None)
         scope.cancel()
+
+
+# helper to check we're not outputting overly verbose tracebacks
+def no_cause_or_context(e: BaseException) -> bool:
+    return e.__cause__ is None and e.__context__ is None
+
+
+async def test_nursery_misnest() -> None:
+    # See https://github.com/python-trio/trio/issues/3298
+    async def inner_func() -> None:
+        inner_nursery = await inner_cm.__aenter__()
+        inner_nursery.start_soon(sleep, 1)
+
+    with pytest.RaisesGroup(
+        pytest.RaisesExc(
+            RuntimeError, match="Nursery stack corrupted", check=no_cause_or_context
+        ),
+        check=no_cause_or_context,
+    ):
+        async with _core.open_nursery() as outer_nursery:
+            inner_cm = _core.open_nursery()
+            outer_nursery.start_soon(inner_func)
+
+
+def test_nursery_nested_child_misnest() -> None:
+    # Note that this example does *not* raise an exception group.
+    async def main() -> None:
+        async with _core.open_nursery():
+            inner_cm = _core.open_nursery()
+            await inner_cm.__aenter__()
+
+    with pytest.raises(RuntimeError, match="Nursery stack corrupted") as excinfo:
+        _core.run(main)
+    assert excinfo.value.__cause__ is None
+    # This AssertionError is kind of redundant, but I don't think we want to remove
+    # the assertion and don't think we care enough to suppress it in this specific case.
+    assert pytest.RaisesExc(
+        AssertionError, match="^Nursery misnesting detected!$"
+    ).matches(excinfo.value.__context__)
+    assert excinfo.value.__context__.__cause__ is None
+    assert excinfo.value.__context__.__context__ is None
+
+
+async def test_asyncexitstack_nursery_misnest() -> None:
+    # This example is trickier than the above ones, and is the one that requires
+    # special logic of abandoned nurseries to avoid nasty internal errors that masks
+    # the RuntimeError.
+    @asynccontextmanager
+    async def asynccontextmanager_that_creates_a_nursery_internally() -> (
+        AsyncGenerator[None]
+    ):
+        async with _core.open_nursery() as nursery:
+            await nursery.start(started_sleeper)
+            nursery.start_soon(unstarted_task)
+            yield
+
+    async def started_sleeper(task_status: _core.TaskStatus[None]) -> None:
+        task_status.started()
+        await sleep_forever()
+
+    async def unstarted_task() -> None:
+        await _core.checkpoint()
+
+    with pytest.RaisesGroup(
+        pytest.RaisesGroup(
+            pytest.RaisesExc(
+                RuntimeError, match="Nursery stack corrupted", check=no_cause_or_context
+            ),
+            check=no_cause_or_context,
+        ),
+        check=no_cause_or_context,
+    ):
+        async with AsyncExitStack() as stack, _core.open_nursery() as nursery:
+            # The asynccontextmanager is going to create a nursery that outlives this nursery!
+            nursery.start_soon(
+                stack.enter_async_context,
+                asynccontextmanager_that_creates_a_nursery_internally(),
+            )
+
+
+def test_asyncexitstack_nursery_misnest_cleanup() -> None:
+    # We guarantee that abandoned tasks get to do cleanup *eventually*, but exceptions
+    # are lost. With more effort it's possible we could reschedule child tasks to exit
+    # promptly.
+    finally_entered = []
+
+    async def main() -> None:
+        async def unstarted_task() -> None:
+            try:
+                await _core.checkpoint()
+            finally:
+                finally_entered.append(True)
+                raise ValueError("this exception is lost")
+
+        # rest of main() is ~identical to the above test
+        @asynccontextmanager
+        async def asynccontextmanager_that_creates_a_nursery_internally() -> (
+            AsyncGenerator[None]
+        ):
+            async with _core.open_nursery() as nursery:
+                nursery.start_soon(unstarted_task)
+                yield
+
+        with pytest.RaisesGroup(
+            pytest.RaisesGroup(
+                pytest.RaisesExc(
+                    RuntimeError,
+                    match="Nursery stack corrupted",
+                    check=no_cause_or_context,
+                ),
+                check=no_cause_or_context,
+            ),
+            check=no_cause_or_context,
+        ):
+            async with AsyncExitStack() as stack, _core.open_nursery() as nursery:
+                # The asynccontextmanager is going to create a nursery that outlives this nursery!
+                nursery.start_soon(
+                    stack.enter_async_context,
+                    asynccontextmanager_that_creates_a_nursery_internally(),
+                )
+        assert not finally_entered  # abandoned task still hasn't been cleaned up
+
+    _core.run(main)
+    assert finally_entered  # now it has
 
 
 @slow
@@ -921,7 +1058,13 @@ def test_broken_abort() -> None:
     gc_collect_harder()
 
 
+# This segfaults, so we need to skipif. Remember to remove the skipif once
+# the upstream issue is resolved.
 @restore_unraisablehook()
+@pytest.mark.skipif(
+    sys.version_info[:3] == (3, 14, 0),
+    reason="https://github.com/python/cpython/issues/133932",
+)
 def test_error_in_run_loop() -> None:
     # Blow stuff up real good to check we at least get a TrioInternalError
     async def main() -> None:
@@ -2121,16 +2264,11 @@ async def test_traceback_frame_removal() -> None:
         assert tb is not None
         return tb.tb_frame.f_code is my_child_task.__code__
 
-    expected_exception = Matcher(KeyError, check=check_traceback)
-
-    with RaisesGroup(expected_exception, expected_exception):
-        # Trick: For now cancel/nursery scopes still leave a bunch of tb gunk
-        # behind. But if there's an ExceptionGroup, they leave it on the group,
-        # which lets us get a clean look at the KeyError itself. Someday I
-        # guess this will always be an ExceptionGroup (#611), but for now we can
-        # force it by raising two exceptions.
+    with RaisesGroup(Matcher(KeyError, check=check_traceback)):
+        # For now cancel/nursery scopes still leave a bunch of tb gunk behind.
+        # But if there's an Exceptiongroup, they leave it on the group,
+        # which lets us get a clean look at the KeyError itself.
         async with _core.open_nursery() as nursery:
-            nursery.start_soon(my_child_task)
             nursery.start_soon(my_child_task)
 
 
@@ -2212,27 +2350,6 @@ async def test_Nursery_private_init() -> None:
 def test_Nursery_subclass() -> None:
     with pytest.raises(TypeError):
         type("Subclass", (_core._run.Nursery,), {})
-
-
-def test_Cancelled_init() -> None:
-    with pytest.raises(TypeError):
-        raise _core.Cancelled
-
-    with pytest.raises(TypeError):
-        _core.Cancelled()
-
-    # private constructor should not raise
-    _core.Cancelled._create()
-
-
-def test_Cancelled_str() -> None:
-    cancelled = _core.Cancelled._create()
-    assert str(cancelled) == "Cancelled"
-
-
-def test_Cancelled_subclass() -> None:
-    with pytest.raises(TypeError):
-        type("Subclass", (_core.Cancelled,), {})
 
 
 def test_CancelScope_subclass() -> None:
