@@ -6,11 +6,11 @@ attrs==25.4.0
     # via
     #   -r docs-requirements.in
     #   outcome
-babel==2.17.0
+babel==2.18.0
     # via sphinx
-beautifulsoup4==4.14.2
+beautifulsoup4==4.14.3
     # via sphinx-codeautolink
-certifi==2025.10.5
+certifi==2026.1.4
     # via requests
 cffi==2.0.0 ; os_name == 'nt' or platform_python_implementation != 'PyPy'
     # via
@@ -18,19 +18,19 @@ cffi==2.0.0 ; os_name == 'nt' or platform_python_implementation != 'PyPy'
     #   cryptography
 charset-normalizer==3.4.4
     # via requests
-click==8.3.0
+click==8.3.1
     # via towncrier
 colorama==0.4.6 ; sys_platform == 'win32'
     # via
     #   click
     #   sphinx
-cryptography==46.0.3
+cryptography==46.0.5
     # via pyopenssl
-docutils==0.21.2
+docutils==0.22.4
     # via
     #   sphinx
     #   sphinx-rtd-theme
-exceptiongroup==1.3.0
+exceptiongroup==1.3.1
     # via -r docs-requirements.in
 idna==3.11
     # via
@@ -49,9 +49,9 @@ markupsafe==3.0.3
     # via jinja2
 outcome==1.3.0.post0
     # via -r docs-requirements.in
-packaging==25.0
+packaging==26.0
     # via sphinx
-pycparser==2.23 ; (implementation_name != 'PyPy' and os_name == 'nt') or (implementation_name != 'PyPy' and platform_python_implementation != 'PyPy')
+pycparser==3.0 ; (implementation_name != 'PyPy' and os_name == 'nt') or (implementation_name != 'PyPy' and platform_python_implementation != 'PyPy')
     # via cffi
 pygments==2.19.2
     # via sphinx
@@ -59,7 +59,7 @@ pyopenssl==25.3.0
     # via -r docs-requirements.in
 requests==2.32.5
     # via sphinx
-roman-numerals-py==3.1.0
+roman-numerals==4.1.0
     # via sphinx
 sniffio==1.3.1
     # via -r docs-requirements.in
@@ -67,9 +67,16 @@ snowballstemmer==3.0.1
     # via sphinx
 sortedcontainers==2.4.0
     # via -r docs-requirements.in
-soupsieve==2.8
+soupsieve==2.8.3
     # via beautifulsoup4
-sphinx==8.2.3
+sphinx==9.0.4 ; python_full_version < '3.12'
+    # via
+    #   -r docs-requirements.in
+    #   sphinx-codeautolink
+    #   sphinx-rtd-theme
+    #   sphinxcontrib-jquery
+    #   sphinxcontrib-trio
+sphinx==9.1.0 ; python_full_version >= '3.12'
     # via
     #   -r docs-requirements.in
     #   sphinx-codeautolink
@@ -78,7 +85,7 @@ sphinx==8.2.3
     #   sphinxcontrib-trio
 sphinx-codeautolink==0.17.5
     # via -r docs-requirements.in
-sphinx-rtd-theme==3.0.2
+sphinx-rtd-theme==3.1.0
     # via -r docs-requirements.in
 sphinxcontrib-applehelp==2.0.0
     # via sphinx
@@ -96,7 +103,7 @@ sphinxcontrib-qthelp==2.0.0
     # via sphinx
 sphinxcontrib-serializinghtml==2.0.0
     # via sphinx
-sphinxcontrib-trio==1.1.2
+sphinxcontrib-trio==1.2.0
     # via -r docs-requirements.in
 towncrier==25.8.0
     # via -r docs-requirements.in
@@ -105,5 +112,5 @@ typing-extensions==4.15.0
     #   beautifulsoup4
     #   exceptiongroup
     #   pyopenssl
-urllib3==2.5.0
+urllib3==2.6.3
     # via requests

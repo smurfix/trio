@@ -175,6 +175,10 @@ def test_static_tool_sees_all_symbols(tool: str, modname: str, tmp_path: Path) -
         completions = script.complete()
         static_names = no_underscores(c.name for c in completions)
     elif tool == "mypy":
+        if sys.implementation.name != "cpython":
+            # https://github.com/python/mypy/issues/20329
+            pytest.skip("mypy does not support pypy")
+
         if not RUN_SLOW:  # pragma: no cover
             pytest.skip("use --run-slow to check against mypy")
 
@@ -272,6 +276,10 @@ def test_static_tool_sees_class_members(
     if tool == "jedi" and sys.implementation.name != "cpython":
         pytest.skip("jedi does not support pypy")
 
+    if tool == "mypy" and sys.implementation.name != "cpython":
+        # https://github.com/python/mypy/issues/20329
+        pytest.skip("mypy does not support pypy")
+
     if tool == "mypy":
         cache = Path.cwd() / ".mypy_cache"
 
@@ -325,7 +333,7 @@ def test_static_tool_sees_class_members(
         # __init__ is called (and reason they don't use attrs is because they're going
         # to be reimplemented in pytest).
         # Not 100% that's the case, and it works locally, so whatever /shrug
-        if class_ is trio.testing.RaisesGroup or class_ is trio.testing.Matcher:
+        if module_name == "trio.testing" and class_name in ("_RaisesGroup", "_Matcher"):
             continue
 
         # dir() and inspect.getmembers doesn't display properties from the metaclass
@@ -356,17 +364,6 @@ def test_static_tool_sees_class_members(
             # C extension classes don't have these dunders, but Python classes do
             ignore_names.add("__firstlineno__")
             ignore_names.add("__static_attributes__")
-
-        # pypy seems to have some additional dunders that differ
-        if sys.implementation.name == "pypy":
-            ignore_names |= {
-                "__basicsize__",
-                "__dictoffset__",
-                "__itemsize__",
-                "__sizeof__",
-                "__weakrefoffset__",
-                "__unicode__",
-            }
 
         # inspect.getmembers sees `name` and `value` in Enums, otherwise
         # it behaves the same way as `dir`

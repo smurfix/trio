@@ -1,3 +1,9 @@
+trio (0.33.0-1) unstable; urgency=medium
+
+  * Merge
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Tue, 24 Feb 2026 20:58:02 +0100
+
 trio (0.31.0-1) unstable; urgency=medium
 
   * Merge
